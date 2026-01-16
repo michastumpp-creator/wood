@@ -190,20 +190,20 @@ with tab1:
                 with st.spinner("Analyse läuft..."):
                     try:
                         prompt = """
-                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument.
+                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument. Penibel wie ein Buchhalter.
                         
                         --- AUFGABE 1: EINZELSTÄMME FINDEN ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
                         WICHTIG: Tabelle ist ZWEISPALTIG (Daten links UND rechts).
                         
-                        Spalten-Kürzel:
+                        Spalten-Kürzel sind meist:
                         - "WNr" = Waldnummer
                         - "Lä"  = Länge
                         - "DoR" = Durchmesser
                         - "FmoR" = Volumen/Fm
-                        
+                        Achte auf korrekte menge. 123,45 Fm sind 123.45 Fm und nicht 1234.00. 
                         --- AUFGABE 2: SUMMEN & POLTER ---
-                        - Suche auf Seite 1/2 nach "Gesamtmenge".
+                        - Suche  nach "Gesamtmenge".
                         - Suche Polter-Listen mit GPS.
 
                         --- JSON STRUKTUR ---
