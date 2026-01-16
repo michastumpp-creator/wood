@@ -197,7 +197,7 @@ with tab1:
                         }
                         """
                         response = client.models.generate_content(
-                            model="gemini-3-flash",
+                            model="gemini-3-flash-preview",
                             contents=[prompt, content],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
