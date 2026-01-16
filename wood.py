@@ -22,10 +22,22 @@ if 'last_upload' not in st.session_state:
 
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
+    """
+    Macht aus ALLEM eine Python-Zahl (Float).
+    Egal ob Input: 1.5 (float), "1,5" (str) oder "1.5" (str).
+    """
+    if value is None:
+        return 0.0
+        
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
+        # Wenn leerer String
+        if not value.strip(): return 0.0
+        
+        # 1. Komma zu Punkt
         clean = value.replace(',', '.')
+        # 2. Alles weg was keine Zahl/Punkt ist
         clean = re.sub(r'[^\d.]', '', clean)
         try:
             val = float(clean)
@@ -34,6 +46,8 @@ def clean_number(value, is_volume=False):
     else:
         return 0.0
 
+    # PLAUSIBILITÄTS-CHECK (Nur für Volumen)
+    # Fängt Fehler ab wie 137 Fm statt 1.37 Fm
     if is_volume and val > 15.0: 
         if 0.5 < (val / 100) < 15: return val / 100
         if 0.5 < (val / 10) < 15: return val / 10
@@ -45,8 +59,12 @@ def fix_coordinates(lat, lon):
     l1 = clean_number(lat)
     l2 = clean_number(lon)
     if l1 == 0 and l2 == 0: return 0.0, 0.0
-    if l1 > l2: return l1, l2
-    else: return l2, l1
+
+    # Latitude (Breite DE) ist immer größer (~48) als Longitude (~9)
+    if l1 > l2:
+        return l1, l2
+    else:
+        return l2, l1 # Tausch
 
 # --- GOOGLE SHEETS VERBINDUNG ---
 def get_spreadsheet():
@@ -64,13 +82,14 @@ def get_spreadsheet():
         st.error(f"Fehler beim Öffnen der Tabelle: {e}")
         return None
 
-# --- DATEN SPEICHERN ---
-# --- DATEN SPEICHERN (FIX FÜR DEUTSCHE TABELLEN) ---
+# --- DATEN SPEICHERN (DEUTSCHES FORMAT) ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # Fallback falls KI Liste statt Dict liefert
     if isinstance(data, list): data = {"polter": data, "meta": {}, "staemme": []}
 
     meta = data.get('meta', {})
@@ -78,11 +97,9 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    # Helper: Punkt zu Komma für Google Sheets (damit es als Zahl erkannt wird)
-    def to_german_float(val):
-        if isinstance(val, (int, float)):
-            return str(val).replace('.', ',')
-        return str(val)
+    # Helper für Google Sheets: Punkt zu Komma konvertieren
+    def to_german(val):
+        return str(val).replace('.', ',')
 
     # BLATT 1: POLTER
     try: ws_polter = sh.worksheet("Polter_Uebersicht")
@@ -94,12 +111,12 @@ def save_to_sheets(data):
         lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
         
-        # HIER DER FIX: to_german_float()
+        # WICHTIG: Wir speichern als String mit KOMMA, damit Google Sheets es kapiert
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
-            to_german_float(fm),      # Fm mit Komma
-            str(lat).replace('.',','), # Koordinaten auch mit Komma für Excel-Kompatibilität? Oder Punkt lassen für Maps?
-            str(lon).replace('.',','), # Meistens besser Punkt für Maps, aber Komma für Tabelle. Ich mache hier mal Komma.
+            to_german(fm), 
+            to_german(lat), 
+            to_german(lon), 
             link
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
@@ -116,43 +133,37 @@ def save_to_sheets(data):
             d = clean_number(s.get('d', 0))
             fm = clean_number(s.get('fm', 0), is_volume=True)
             
-            # HIER DER FIX: to_german_float()
             stamm_rows.append([
                 timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), 
-                to_german_float(l), 
-                to_german_float(d), 
+                to_german(l), 
+                to_german(d), 
                 s.get('klasse', ''), 
-                to_german_float(fm)
+                to_german(fm)
             ])
         if stamm_rows: ws_stamm.append_rows(stamm_rows, value_input_option='USER_ENTERED')
 
     return True
 
-# --- NEU: DATEN LÖSCHEN ---
+# --- DATEN LÖSCHEN ---
 def delete_entry(los, revier, datum_aufnahme):
     sh = get_spreadsheet()
     if not sh: return False
 
     try:
-        # 1. POLTER BEREINIGEN
+        # 1. POLTER
         ws_p = sh.worksheet("Polter_Uebersicht")
         data_p = ws_p.get_all_records()
         df_p = pd.DataFrame(data_p)
         
-        # Wir behalten alle Zeilen, die NICHT zum Lösch-Ziel gehören
-        # Wir wandeln alles in Strings um, um Typ-Probleme (123 vs "123") zu vermeiden
         mask_p = (df_p['Los_Nr'].astype(str) == str(los)) & \
                  (df_p['Revier'].astype(str) == str(revier)) & \
                  (df_p['Datum_Aufnahme'].astype(str) == str(datum_aufnahme))
         
-        df_p_clean = df_p[~mask_p] # Das Tilde ~ bedeutet "NICHT" (Invertierung)
-        
-        ws_p.clear() # Blatt leeren
-        # Header + Daten schreiben
+        df_p_clean = df_p[~mask_p]
+        ws_p.clear()
         ws_p.update([df_p_clean.columns.values.tolist()] + df_p_clean.values.tolist())
 
-        # 2. STÄMME BEREINIGEN
-        # Stämme haben evtl. kein "Datum_Aufnahme" in der Tabelle, daher löschen wir über Los & Revier
+        # 2. STÄMME
         try:
             ws_s = sh.worksheet("Einzelstaemme")
             data_s = ws_s.get_all_records()
@@ -160,26 +171,47 @@ def delete_entry(los, revier, datum_aufnahme):
             
             mask_s = (df_s['Los_Nr'].astype(str) == str(los)) & \
                      (df_s['Revier'].astype(str) == str(revier))
-            
             df_s_clean = df_s[~mask_s]
-            
             ws_s.clear()
             ws_s.update([df_s_clean.columns.values.tolist()] + df_s_clean.values.tolist())
-        except:
-            pass # Falls Blatt nicht existiert oder leer ist, egal
+        except: pass
 
         return True
     except Exception as e:
-        st.error(f"Fehler beim Löschen: {e}")
+        st.error(f"Fehler: {e}")
         return False
 
+# --- NEU: DATEN LADEN & REPARIEREN ---
 def load_data_frames():
     sh = get_spreadsheet()
     if not sh: return pd.DataFrame(), pd.DataFrame()
-    try: df_polter = pd.DataFrame(sh.worksheet("Polter_Uebersicht").get_all_records())
+    
+    # 1. POLTER LADEN
+    try:
+        data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
+        df_polter = pd.DataFrame(data_p)
+        
+        # WICHTIG: Wir wandeln die Texte ("1,37") sofort zurück in Zahlen (1.37)
+        numeric_cols = ['Menge_Fm', 'Lat', 'Lon']
+        for col in numeric_cols:
+            if col in df_polter.columns:
+                df_polter[col] = df_polter[col].apply(clean_number)
+                
     except: df_polter = pd.DataFrame()
-    try: df_staemme = pd.DataFrame(sh.worksheet("Einzelstaemme").get_all_records())
+
+    # 2. STÄMME LADEN
+    try:
+        data_s = sh.worksheet("Einzelstaemme").get_all_records()
+        df_staemme = pd.DataFrame(data_s)
+        
+        # Auch hier: Text ("1,37") -> Zahl (1.37)
+        numeric_cols_s = ['Volumen_Fm', 'Laenge', 'Durchmesser']
+        for col in numeric_cols_s:
+            if col in df_staemme.columns:
+                df_staemme[col] = df_staemme[col].apply(clean_number)
+
     except: df_staemme = pd.DataFrame()
+    
     return df_polter, df_staemme
 
 # --- APP START ---
@@ -213,20 +245,20 @@ with tab1:
                 with st.spinner("Analyse läuft..."):
                     try:
                         prompt = """
-                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument. Penibel wie ein Buchhalter.
+                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument.
                         
                         --- AUFGABE 1: EINZELSTÄMME FINDEN ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
                         WICHTIG: Tabelle ist ZWEISPALTIG (Daten links UND rechts).
                         
-                        Spalten-Kürzel sind meist:
+                        Spalten-Kürzel:
                         - "WNr" = Waldnummer
                         - "Lä"  = Länge
                         - "DoR" = Durchmesser
                         - "FmoR" = Volumen/Fm
-                        Achte auf korrekte menge. 123,45 Fm sind 123.45 Fm und nicht 1234.00. Speicher aber in den tabellen mit . als dezimaltrenner.
+                        
                         --- AUFGABE 2: SUMMEN & POLTER ---
-                        - Suche  nach "Gesamtmenge".
+                        - Suche auf Seite 1/2 nach "Gesamtmenge".
                         - Suche Polter-Listen mit GPS.
 
                         --- JSON STRUKTUR ---
@@ -288,10 +320,15 @@ with tab2:
         valid_pts = []
         for _, row in df_polter.iterrows():
             try:
-                lat, lon = fix_coordinates(row.get('Lat',0), row.get('Lon',0))
-                if lat != 0:
+                # Da clean_number beim Laden lief, sind es jetzt echte Floats!
+                lat = row.get('Lat', 0)
+                lon = row.get('Lon', 0)
+                
+                # Sicherheitscheck falls doch 0
+                if lat != 0 and lon != 0:
                     valid_pts.append({"lat": lat, "lon": lon, "info": f"Revier {row['Revier']} | P{row['Polter_Nr']}"})
             except: pass
+            
         if valid_pts:
             map_df = pd.DataFrame(valid_pts)
             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=11)
@@ -306,21 +343,19 @@ with tab2:
             groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
             
             for (revier, los, datum), group in groups:
-                polter_sum = group['Menge_Fm'].apply(clean_number).sum()
+                # Summe berechnen (jetzt mit echten Zahlen)
+                polter_sum = group['Menge_Fm'].sum()
                 
-                # Container für einen Eintrag
                 with st.expander(f"🌲 {revier} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm"):
                     
-                    # LÖSCH BUTTON
                     col_del, col_info = st.columns([1, 4])
                     with col_del:
-                        # Wichtig: Unique Key für jeden Button!
                         if st.button(f"🗑️ Liste Löschen", key=f"del_{revier}_{los}_{datum}"):
                             with st.spinner("Lösche Daten..."):
                                 if delete_entry(los, revier, datum):
                                     st.success("Gelöscht!")
-                                    st.cache_data.clear() # Cache leeren
-                                    st.rerun() # Seite neu laden
+                                    st.cache_data.clear()
+                                    st.rerun()
 
                     c1, c2 = st.columns(2)
                     with c1:
