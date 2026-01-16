@@ -32,7 +32,7 @@ if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image, caption="Dein Foto", use_container_width=True)
         
-        with st.spinner('Analysiere (Gemini 2.0 Flash Lite)...'):
+        with st.spinner('Analysiere (Experimental Modus)...'):
             
             prompt = """
             Du bist ein Assistent für die Forstwirtschaft.
@@ -55,10 +55,10 @@ if uploaded_file is not None:
             ]
             """
             
-            # ÄNDERUNG: Wir nehmen die 'Lite' Version aus deiner Liste.
-            # Die ist für hohe Mengen gemacht und sollte funktionieren.
+            # TRICK: Wir nutzen das Experimental-Modell.
+            # Das hat oft ein eigenes Kontingent, wenn die anderen leer sind.
             response = client.models.generate_content(
-                model="models/gemini-2.0-flash-lite",
+                model="models/gemini-2.0-flash-exp",
                 contents=[prompt, image],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
