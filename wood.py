@@ -178,7 +178,7 @@ with tab1:
                         Analysiere diese Forst-Holzliste exakt.
                         
                         1. SUCHAUFTRAG "GESAMTMENGE":
-                           Suche irgendwo im Dokument (meist Seite 1) nach der "Gesamtmenge FmoR" oder "Summe".
+                           Suche irgendwo im Dokument (meist Seite 1) nach der "Gesamtmenge FmoR" oder "Summe" oder gesamt.
                            Extrahiere diesen Wert als 'dokument_summe'.
                         
                         2. SUCHAUFTRAG "POLTER & STÄMME":
@@ -197,7 +197,7 @@ with tab1:
                         }
                         """
                         response = client.models.generate_content(
-                            model="models/gemini-2.0-flash",
+                            model="models/gemini-3.0-pro",
                             contents=[prompt, content],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
