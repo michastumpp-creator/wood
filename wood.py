@@ -22,16 +22,11 @@ if 'last_upload' not in st.session_state:
 
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
-    """
-    Reinigt Zahlen.
-    Macht aus 1,37 -> 1.37
-    """
+    """Reinigt normale Zahlen und Mengen."""
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
-        # 1. Komma zu Punkt
         clean = value.replace(',', '.')
-        # 2. Alles weg was keine Zahl/Punkt ist
         clean = re.sub(r'[^\d.]', '', clean)
         try:
             val = float(clean)
@@ -40,48 +35,78 @@ def clean_number(value, is_volume=False):
     else:
         return 0.0
 
-    # Volumen-Plausibilität (Ein Stamm hat selten > 20 Fm)
+    # Volumen-Plausibilität
     if is_volume and val > 20.0:
         if 0.5 < (val / 100) < 20: return val / 100
         if 0.5 < (val / 10) < 20: return val / 10
-            
     return val
 
-# --- HELFER: KOORDINATEN RETTEN (Deutschland-Filter) ---
-def fix_coordinates(lat, lon):
+# --- HELFER: GPS MATHE-GENIE ---
+def parse_dms_to_decimal(val):
+    """
+    Wandelt "48°17'06,71" (DMS) korrekt in 48.285... (Dezimal) um.
+    Versteht auch LaTeX-Müll aus dem PDF.
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+
+    val_str = str(val).strip()
     
-    def force_germany_gps(val):
-        """Zwingt eine Zahl in den Bereich von DE Koordinaten"""
-        v = clean_number(val)
+    # 1. Versuch: Regex für Grad, Minuten, Sekunden
+    # Sucht nach 3 Zahlengruppen. Ignoriert den Müll ($ \circ ' etc) dazwischen.
+    # Beispiel: 48^{\circ}17^{\prime}06,71
+    matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
+    
+    if matches:
+        try:
+            d = float(matches[0][0])
+            m = float(matches[0][1])
+            s = float(matches[0][2].replace(',', '.'))
+            
+            # Die Formel: D + M/60 + S/3600
+            decimal = d + (m / 60.0) + (s / 3600.0)
+            return decimal
+        except:
+            pass
+
+    # 2. Versuch: Es ist schon eine Dezimalzahl, aber vielleicht als String "48,123"
+    return clean_number(val)
+
+def fix_coordinates(lat, lon):
+    """
+    Kombiniert DMS-Umrechnung und Bereichs-Check (Deutschland).
+    """
+    # Schritt 1: Umrechnen (falls String/DMS)
+    l1 = parse_dms_to_decimal(lat)
+    l2 = parse_dms_to_decimal(lon)
+
+    # Schritt 2: Skalieren (falls Komma verrutscht z.B. 48285197 -> 48.28)
+    def force_range(v):
         if v == 0: return 0.0
-        
-        # Solange die Zahl zu groß ist (z.B. 4829583), teilen wir durch 10
-        # Latitude DE max ca 55, Lon max ca 15.
-        # Wir nehmen 180 als Obergrenze für "Geografisch möglich"
+        # Solange > 180 (Erde zu Ende), teilen wir durch 10
         while v > 180:
-            v = v / 10.0
+            v /= 10.0
         return v
 
-    l1 = force_germany_gps(lat)
-    l2 = force_germany_gps(lon)
+    l1 = force_range(l1)
+    l2 = force_range(l2)
     
     if l1 == 0 and l2 == 0: return 0.0, 0.0
 
-    # Wer ist wer?
-    # Latitude (Breite) DE: ca. 47 - 55
-    # Longitude (Länge) DE: ca. 6 - 15
-    
+    # Schritt 3: Tauschen (Lat ist in DE immer ~48-54, Lon ~6-15)
+    # Check: Welcher Wert passt in welches Fenster?
     final_lat, final_lon = 0.0, 0.0
     
-    # Check: Welcher Wert passt in welches Fenster?
+    # Ist l1 der Breitengrad (40-60)?
     if 40 < l1 < 60:
         final_lat = l1
         final_lon = l2
+    # Oder ist l2 der Breitengrad?
     elif 40 < l2 < 60:
         final_lat = l2
         final_lon = l1
     else:
-        # Fallback: Der größere Wert ist Lat (in DE)
+        # Notlösung: Der größere Wert ist Lat
         if l1 > l2: return l1, l2
         else: return l2, l1
         
@@ -125,7 +150,9 @@ def save_to_sheets(data):
     polter_rows = []
     for p in data.get('polter', []):
         fm = clean_number(p.get('fm', 0))
+        # HIER WIRD GERECHNET
         lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
+        
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
@@ -179,7 +206,7 @@ def delete_entry(los, revier, datum_aufnahme):
         st.error(f"Fehler: {e}")
         return False
 
-# --- DATEN LADEN & REPARIEREN ---
+# --- DATEN LADEN ---
 def load_data_frames():
     sh = get_spreadsheet()
     if not sh: return pd.DataFrame(), pd.DataFrame()
@@ -192,7 +219,7 @@ def load_data_frames():
             if 'Menge_Fm' in df_polter.columns:
                 df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
             
-            # Koordinaten fixen (Zeilenweise)
+            # Koordinaten: Hier nutzen wir die gleiche Logik wie beim Speichern
             if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
                 coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
                 df_polter['Lat'] = [c[0] for c in coords]
@@ -248,16 +275,16 @@ with tab1:
                         Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
                         --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
-                        Suche nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
+                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
                         
                         --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
-                        WICHTIG: Die Tabelle ist oft ZWEISPALTIG. Lese beide Spalten!
+                        WICHTIG: Die Tabelle ist ZWEISPALTIG. Lese beide Spalten!
                         Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
                         
                         --- AUFGABE 3: POLTER & GPS ---
-                        Suche Polter-Listen mit GPS ($48^{\circ}...$).
-                        Rechne DMS in Dezimalgrad um (z.B. 48.1234).
+                        Suche Polter-Listen mit GPS. 
+                        ACHTUNG: Format ist oft DMS (Grad Minute Sekunde). Extrahiere den String exakt so wie er da steht, z.B. "48°17'06,71".
                         
                         --- JSON STRUKTUR ---
                         {
@@ -266,12 +293,12 @@ with tab1:
                                 "dokument_summe": Float, 
                                 "dokument_anzahl_staemme": Int
                             },
-                            "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
+                            "polter": [{"nr": Int, "fm": Float, "lat": "String (Raw)", "lon": "String (Raw)"}],
                             "staemme": [{"wnr": "String", "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
                         }
                         """
                         response = client.models.generate_content(
-                            model="gemini-3-flash-preview", # Oder 2.0 Flash wenn nicht verfügbar
+                            model="gemini-3-flash-preview", 
                             contents=[prompt, content],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
