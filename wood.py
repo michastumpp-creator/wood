@@ -9,7 +9,6 @@ from PIL import Image
 from google.oauth2 import service_account
 import gspread
 from datetime import datetime
-import re
 import fitz  # PyMuPDF
 import io
 
@@ -22,64 +21,36 @@ if 'analyzed_data' not in st.session_state:
 if 'last_upload' not in st.session_state:
     st.session_state.last_upload = None
 
-# --- HELFER: ZAHLEN RETTEN ---
-
-
-    # Volumen-Plausibilität
-    if is_volume and val > 20.0:
-        if 0.5 < (val / 100) < 20: return val / 100
-        if 0.5 < (val / 10) < 20: return val / 10
-    return val
-
-# --- HELFER: GPS (DMS -> DEZIMAL) ---
-def parse_dms_to_decimal(val):
+# --- HELFER: NUR TYPE-CASTING (KEINE LOGIK!) ---
+def to_float(val):
     """
-    Wandelt nur das kryptische DMS Format ($48^{\circ}...) in eine Zahl um.
-    Fasst normale Zahlen NICHT an.
+    Versucht nur, den Wert in eine Zahl zu verwandeln, damit Python rechnen kann.
+    Ändert den Wert NICHT (kein Teilen durch 100 etc.).
     """
-    if isinstance(val, (int, float)):
-        return float(val)
-
-    val_str = str(val).strip()
-    
-    # Regex für Grad, Minuten, Sekunden (z.B. 48°17'06,71)
-    matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
-    
-    if matches:
+    if val is None: return 0.0
+    if isinstance(val, (int, float)): return float(val)
+    if isinstance(val, str):
+        # Nur Komma zu Punkt, damit Python nicht abstürzt
         try:
-            d = float(matches[0][0])
-            m = float(matches[0][1])
-            s = float(matches[0][2].replace(',', '.'))
-            # Formel: Grad + Min/60 + Sek/3600
-            return d + (m / 60.0) + (s / 3600.0)
+            return float(val.replace(',', '.'))
         except:
-            pass
-            
-    # Wenn kein DMS erkannt wurde, versuchen wir es als normale Zahl zu lesen
-    return clean_number(val)
-
-def fix_coordinates(lat, lon):
-    """
-    MINIMAL-LOGIK:
-    Wir rechnen DMS um (weil 48°17' sonst Text bleibt).
-    ABER: Wir teilen NICHT durch 10. Wir tauschen NICHT Lat/Lon.
-    Wir lassen die Werte exakt so, wie sie sind.
-    """
-    l1 = parse_dms_to_decimal(lat)
-    l2 = parse_dms_to_decimal(lon)
-    
-    return l1, l2
+            return 0.0 # Wenn es Text ist (z.B. "48°..."), wird es 0
+    return 0.0
 
 # --- HELFER: PDF MARKIEREN ---
 def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl):
     uploaded_file.seek(0)
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     images = []
-
+    
+    # Suchbegriffe vorbereiten
     search_terms = []
     if text_summe > 0:
-        search_terms.append({"val": str(text_summe).replace('.', ','), "color": (1, 1, 0)}) 
-        search_terms.append({"val": str(text_summe), "color": (1, 1, 0)}) 
+        # Suche nach Zahl als String
+        val_str = str(text_summe)
+        search_terms.append({"val": val_str, "color": (1, 1, 0)}) 
+        search_terms.append({"val": val_str.replace('.', ','), "color": (1, 1, 0)}) 
+    
     if text_anzahl > 0:
         search_terms.append({"val": str(int(text_anzahl)), "color": (0, 1, 1)}) 
 
@@ -113,7 +84,7 @@ def get_spreadsheet():
         st.error(f"Fehler beim Öffnen der Tabelle: {e}")
         return None
 
-# --- DATEN SPEICHERN ---
+# --- DATEN SPEICHERN (ROH) ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
@@ -126,7 +97,9 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    def to_german(val): return str(val).replace('.', ',')
+    # Damit Google Sheets Zahlen erkennt (Deutsch = Komma)
+    def fmt(val): 
+        return str(val).replace('.', ',')
 
     # BLATT 1: POLTER
     try: ws_polter = sh.worksheet("Polter_Uebersicht")
@@ -134,14 +107,20 @@ def save_to_sheets(data):
 
     polter_rows = []
     for p in data.get('polter', []):
-        fm = clean_number(p.get('fm', 0))
-        # Koordinaten holen (ohne Tricks)
-        lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
+        # Wir nehmen die Werte ROH aus dem JSON
+        # Wir formatieren sie nur mit Komma für Google Sheets, ändern aber den Wert nicht
+        lat = p.get('lat', 0)
+        lon = p.get('lon', 0)
         
-        link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
+        # Link bauen (braucht Punkt)
+        link = f"http://maps.google.com/?q={lat},{lon}"
+        
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
-            to_german(fm), to_german(lat), to_german(lon), link
+            fmt(p.get('fm')), 
+            fmt(lat), 
+            fmt(lon), 
+            link
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
@@ -153,12 +132,12 @@ def save_to_sheets(data):
 
         stamm_rows = []
         for s in staemme_data:
-            l = clean_number(s.get('l', 0))
-            d = clean_number(s.get('d', 0))
-            fm = clean_number(s.get('fm', 0), is_volume=True)
             stamm_rows.append([
                 timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), 
-                to_german(l), to_german(d), s.get('klasse', ''), to_german(fm)
+                fmt(s.get('l')), 
+                fmt(s.get('d')), 
+                s.get('klasse', ''), 
+                fmt(s.get('fm'))
             ])
         if stamm_rows: ws_stamm.append_rows(stamm_rows, value_input_option='USER_ENTERED')
 
@@ -199,24 +178,19 @@ def load_data_frames():
     try:
         data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
         df_polter = pd.DataFrame(data_p)
-        if not df_polter.empty:
-            if 'Menge_Fm' in df_polter.columns:
-                df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
-            if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
-                coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
-                df_polter['Lat'] = [c[0] for c in coords]
-                df_polter['Lon'] = [c[1] for c in coords]
+        # Wir versuchen Strings in Zahlen zu wandeln ("1,5" -> 1.5), damit Summen gehen
+        # Aber wir ändern keine Werte (kein Teilen durch 100)
+        numeric_cols = ['Menge_Fm', 'Lat', 'Lon']
+        for c in numeric_cols:
+            if c in df_polter.columns: df_polter[c] = df_polter[c].apply(to_float)
     except: df_polter = pd.DataFrame()
 
     try:
         data_s = sh.worksheet("Einzelstaemme").get_all_records()
         df_staemme = pd.DataFrame(data_s)
-        if not df_staemme.empty:
-            if 'Volumen_Fm' in df_staemme.columns:
-                df_staemme['Volumen_Fm'] = df_staemme['Volumen_Fm'].apply(lambda x: clean_number(x, is_volume=True))
-            for col in ['Laenge', 'Durchmesser']:
-                if col in df_staemme.columns:
-                    df_staemme[col] = df_staemme[col].apply(clean_number)
+        numeric_cols = ['Volumen_Fm', 'Laenge', 'Durchmesser']
+        for c in numeric_cols:
+            if c in df_staemme.columns: df_staemme[c] = df_staemme[c].apply(to_float)
     except: df_staemme = pd.DataFrame()
     
     return df_polter, df_staemme
@@ -249,23 +223,24 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
-                with st.spinner("Analyse läuft..."):
+                with st.spinner("KI analysiert (Ohne Nachbearbeitung)..."):
                     try:
                         # --- PROMPT ---
                         prompt = """
-                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
+                        Du bist ein KI-Assistent. Extrahiere die Daten exakt.
                         
-                        --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
-                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
+                        1. METADATEN:
+                        Suche "Gesamtmenge" (Fm) und "Stämme gezählt".
                         
-                        --- AUFGABE 2: EINZELSTÄMME ---
-                        Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
-                        WICHTIG: Die Tabelle ist ZWEISPALTIG. Lese beide Spalten!
-                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
+                        2. EINZELSTÄMME:
+                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Sie ist ZWEISPALTIG. Lese alles.
+                        Spalten: "WNr", "Lä", "DoR", "FmoR".
                         
-                        --- AUFGABE 3: POLTER & GPS ---
+                        3. POLTER & GPS:
                         Suche Polter-Listen mit GPS. 
-                        Extrahiere den GPS-String exakt so wie er da steht, z.B. "48°17'06,71".
+                        WICHTIG: Wandle die Koordinaten in Dezimalgrad um (z.B. 48.1234). 
+                        Das JSON muss direkt die fertigen Zahlen (Floats) enthalten!
+                        Keine Strings, keine DMS-Zeichen. Rechne es selbst um.
                         
                         --- JSON STRUKTUR ---
                         {
@@ -274,7 +249,7 @@ with tab1:
                                 "dokument_summe": Float, 
                                 "dokument_anzahl_staemme": Int
                             },
-                            "polter": [{"nr": Int, "fm": Float, "lat": "String (Raw)", "lon": "String (Raw)"}],
+                            "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
                             "staemme": [{"wnr": "String", "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
                         }
                         """
@@ -297,23 +272,21 @@ with tab1:
         st.divider()
         st.subheader("🕵️ Prüfung & Validierung")
         
-        doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
-        doc_count = int(clean_number(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
+        doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
+        doc_count = int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
         
         # PDF HIGHLIGHT
         if uploaded_file.type == "application/pdf":
             with st.expander("📄 PDF-Check (Visuell)", expanded=True):
                 try:
                     marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count)
-                    st.caption("🟡 Gelb = Gefundene Festmeter | 🔵 Blau = Gefundene Stückzahl")
                     cols = st.columns(len(marked_images))
                     for idx, img in enumerate(marked_images):
                         with cols[idx]:
                             st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
-                except Exception as e:
-                    st.warning(f"Konnte PDF nicht markieren (Installiere pymupdf?): {e}")
+                except: st.warning("PDF Markierung fehlgeschlagen.")
 
-        stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
+        stamm_sum = sum([to_float(s.get('fm', 0)) for s in data.get('staemme', [])])
         stamm_count = len(data.get('staemme', []))
         
         c1, c2, c3 = st.columns(3)
@@ -323,9 +296,8 @@ with tab1:
             st.write(f"Ist: {stamm_sum:.2f} Fm")
             diff = abs(doc_sum - stamm_sum)
             if doc_sum > 0:
-                if diff < 1.0: st.success(f"✅ OK")
+                if diff < 1.0: st.success("✅ OK")
                 else: st.error(f"⚠️ Diff: {diff:.2f}")
-            else: st.info("Soll fehlt")
             
         with c2:
             st.markdown("**Stückzahl-Check**")
@@ -334,7 +306,6 @@ with tab1:
             if doc_count > 0:
                 if doc_count == stamm_count: st.success("✅ OK")
                 else: st.error(f"⚠️ Diff: {doc_count - stamm_count}")
-            else: st.info("Soll fehlt")
             
         with c3:
             st.metric("Polter", len(data.get('polter', [])))
@@ -389,10 +360,10 @@ with tab2:
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                         valid_pts = []
                         for _, row in group.iterrows():
+                            # Nur wenn es wirklich Zahlen sind
                             try:
-                                lat, lon = row.get('Lat', 0), row.get('Lon', 0)
-                                # Filter: Zeige nur Punkte an, die halbwegs Sinn machen (Lat > 40)
-                                if lat > 40:
+                                lat, lon = float(row['Lat']), float(row['Lon'])
+                                if lat != 0: 
                                     valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
                             except: pass
                         if valid_pts:
