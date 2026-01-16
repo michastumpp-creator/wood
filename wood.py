@@ -11,6 +11,7 @@ import gspread
 from datetime import datetime
 import fitz  # PyMuPDF
 import io
+import re
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
@@ -21,50 +22,59 @@ if 'analyzed_data' not in st.session_state:
 if 'last_upload' not in st.session_state:
     st.session_state.last_upload = None
 
-# --- HELFER: INPUT VERSTEHEN (Für Berechnungen im RAM) ---
+# --- HELFER: INPUT VERSTEHEN ---
 def to_float(val):
-    """
-    Versucht, einen Wert für Python-Berechnungen (Summen) lesbar zu machen.
-    Ändert aber NICHTS am Wert selbst (kein Teilen durch 100).
-    """
     if val is None: return 0.0
     if isinstance(val, (int, float)): return float(val)
     if isinstance(val, str):
         try:
-            # Komma zu Punkt für Python-Interna
             return float(val.replace(',', '.'))
         except:
             return 0.0
     return 0.0
 
-# --- HELFER: PDF MARKIEREN ---
-def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl):
+# --- HELFER: PDF MARKIEREN (JETZT MIT KOORDINATEN) ---
+def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter_liste):
     uploaded_file.seek(0)
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     images = []
     
     search_terms = []
-    # Wir suchen nach der Zahl so wie sie ist, und einmal mit Komma/Punkt getauscht
+    
+    # 1. Summen & Anzahl (Gelb & Blau)
     if text_summe > 0:
         val_str = str(text_summe)
-        search_terms.append({"val": val_str, "color": (1, 1, 0)}) 
+        search_terms.append({"val": val_str, "color": (1, 1, 0)}) # Gelb
         search_terms.append({"val": val_str.replace('.', ','), "color": (1, 1, 0)}) 
     
     if text_anzahl > 0:
-        search_terms.append({"val": str(int(text_anzahl)), "color": (0, 1, 1)}) 
+        search_terms.append({"val": str(int(text_anzahl)), "color": (0, 1, 1)}) # Türkis
+
+    # 2. Koordinaten (Grün)
+    # Wir nutzen den "raw"-String, den die KI gefunden hat (z.B. "48°17'06")
+    for p in polter_liste:
+        raw_lat = p.get('lat_raw', '')
+        raw_lon = p.get('lon_raw', '')
+        if raw_lat: search_terms.append({"val": raw_lat, "color": (0, 1, 0)}) # Grün
+        if raw_lon: search_terms.append({"val": raw_lon, "color": (0, 1, 0)})
 
     for page_num, page in enumerate(doc):
+        # Nur erste 3 Seiten scannen
         if page_num > 2: break
+        
         for item in search_terms:
+            # Suche exakten Text
             quads = page.search_for(item["val"])
             if quads:
                 for quad in quads:
                     annot = page.add_highlight_annot(quad)
                     annot.set_colors(stroke=item["color"])
                     annot.update()
+                    
         pix = page.get_pixmap(dpi=150)
         img_data = pix.tobytes("png")
         images.append(Image.open(io.BytesIO(img_data)))
+        
     return images
 
 # --- GOOGLE SHEETS VERBINDUNG ---
@@ -83,7 +93,7 @@ def get_spreadsheet():
         st.error(f"Fehler beim Öffnen der Tabelle: {e}")
         return None
 
-# --- DATEN SPEICHERN (PUNKT ERZWINGEN) ---
+# --- DATEN SPEICHERN ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
@@ -96,15 +106,11 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    # FORMATIERUNG: ALLES MIT PUNKT (.)
     def fmt(val): 
         if val is None: return ""
-        # 1. In String wandeln
-        s = str(val)
-        # 2. Komma durch Punkt ersetzen
-        return s.replace(',', '.')
+        return str(val).replace(',', '.')
 
-    # BLATT 1: POLTER
+    # 1. POLTER
     try: ws_polter = sh.worksheet("Polter_Uebersicht")
     except: ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=10); ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link"])
 
@@ -112,37 +118,29 @@ def save_to_sheets(data):
     for p in data.get('polter', []):
         lat = p.get('lat', 0)
         lon = p.get('lon', 0)
-        
-        # Link bauen (braucht Punkt, haben wir ja jetzt)
-        # Wir nehmen die Werte so wie fmt sie ausgibt
-        lat_clean = fmt(lat)
-        lon_clean = fmt(lon)
-        
-        link = f"http://maps.google.com/?q={lat_clean},{lon_clean}"
+        # Link
+        link = f"http://maps.google.com/?q={fmt(lat)},{fmt(lon)}"
         
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
-            fmt(p.get('fm')), 
-            lat_clean, 
-            lon_clean, 
-            link
+            fmt(p.get('fm')), fmt(lat), fmt(lon), link
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
-    # BLATT 2: EINZELSTÄMME
-    staemme_data = data.get('staemme', [])
-    if staemme_data:
+    # 2. STÄMME
+    # HIER FILTERN WIR DIE "K"-STÄMME RAUS!
+    raw_stems = data.get('staemme', [])
+    valid_stems = [s for s in raw_stems if not s.get('klammer', False)]
+    
+    if valid_stems:
         try: ws_stamm = sh.worksheet("Einzelstaemme")
         except: ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=10); ws_stamm.append_row(["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm"])
 
         stamm_rows = []
-        for s in staemme_data:
+        for s in valid_stems:
             stamm_rows.append([
                 timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), 
-                fmt(s.get('l')), 
-                fmt(s.get('d')), 
-                s.get('klasse', ''), 
-                fmt(s.get('fm'))
+                fmt(s.get('l')), fmt(s.get('d')), s.get('klasse', ''), fmt(s.get('fm'))
             ])
         if stamm_rows: ws_stamm.append_rows(stamm_rows, value_input_option='USER_ENTERED')
 
@@ -183,7 +181,6 @@ def load_data_frames():
     try:
         data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
         df_polter = pd.DataFrame(data_p)
-        # Wir wandeln alles in Floats für die Anzeige/Karte
         numeric_cols = ['Menge_Fm', 'Lat', 'Lon']
         for c in numeric_cols:
             if c in df_polter.columns: df_polter[c] = df_polter[c].apply(to_float)
@@ -237,15 +234,16 @@ with tab1:
                         Suche "Gesamtmenge" (Fm) und "Stämme gezählt".
                         
                         2. EINZELSTÄMME:
-                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". ZWEISPALTIG (Links & Rechts).
-                        Spalten: "WNr", "Lä", "DoR", "FmoR".
+                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
+                        ACHTUNG: Achte auf die Spalte vor der Holzart. Wenn dort ein "K" steht, ist es ein Klammerstamm!
+                        Setze im JSON `klammer: true` für diese Zeilen.
+                        Spalten: "WNr", "K" (optional), "Art", "Lä", "DoR", "FmoR".
                         
                         3. POLTER & GPS:
-                        Suche Polter-Listen mit GPS.
-                        
-                        WICHTIGSTE REGEL: 
-                        Speichere Zahlen so, wie sie mathematisch korrekt sind (1,37 Fm -> 1.37).
-                        Nutze PUNKT als Dezimaltrenner im JSON.
+                        Suche Polter-Listen mit GPS. 
+                        WICHTIG: Gib mir ZWEI Werte pro Koordinate:
+                        1. `lat` / `lon`: Die umgerechnete Dezimalzahl (Float, z.B. 48.1234)
+                        2. `lat_raw` / `lon_raw`: Den EXAKTEN Textstring aus dem PDF (z.B. "48°17'06"), damit ich ihn markieren kann.
                         
                         --- JSON STRUKTUR ---
                         {
@@ -254,8 +252,15 @@ with tab1:
                                 "dokument_summe": Float, 
                                 "dokument_anzahl_staemme": Int
                             },
-                            "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
-                            "staemme": [{"wnr": "String", "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
+                            "polter": [{
+                                "nr": Int, "fm": Float, 
+                                "lat": Float, "lon": Float,
+                                "lat_raw": "String", "lon_raw": "String"
+                            }],
+                            "staemme": [{
+                                "wnr": "String", "klammer": Boolean, 
+                                "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float
+                            }]
                         }
                         """
                         response = client.models.generate_content(
@@ -280,20 +285,29 @@ with tab1:
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
         
+        # --- FILTERUNG DER K-STÄMME ---
+        all_stems = data.get('staemme', [])
+        valid_stems = [s for s in all_stems if not s.get('klammer', False)]
+        klammer_stems = [s for s in all_stems if s.get('klammer', False)]
+        
+        stamm_sum = sum([to_float(s.get('fm', 0)) for s in valid_stems])
+        stamm_count = len(valid_stems)
+        # ------------------------------
+
         # PDF HIGHLIGHT
         if uploaded_file.type == "application/pdf":
             with st.expander("📄 PDF-Check (Visuell)", expanded=True):
                 try:
-                    marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count)
+                    # Wir übergeben jetzt auch die Polter-Liste für GPS Markierung
+                    marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count, data.get('polter', []))
+                    st.caption("🟡 Gelb = Summe | 🔵 Blau = Anzahl | 🟢 Grün = Koordinaten")
                     cols = st.columns(len(marked_images))
                     for idx, img in enumerate(marked_images):
                         with cols[idx]:
                             st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
-                except: pass
+                except Exception as e:
+                    st.warning(f"Markierung fehlgeschlagen: {e}")
 
-        stamm_sum = sum([to_float(s.get('fm', 0)) for s in data.get('staemme', [])])
-        stamm_count = len(data.get('staemme', []))
-        
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("**Festmeter-Check**")
@@ -303,20 +317,29 @@ with tab1:
             if doc_sum > 0:
                 if diff < 1.0: st.success("✅ OK")
                 else: st.error(f"⚠️ Diff: {diff:.2f}")
+            else: st.info("Soll fehlt")
             
         with c2:
             st.markdown("**Stückzahl-Check**")
-            st.write(f"Soll: {doc_count}")
-            st.write(f"Ist: {stamm_count}")
+            st.write(f"Soll: {doc_count} Stk")
+            st.write(f"Ist: {stamm_count} Stk")
+            if klammer_stems:
+                st.caption(f"(+ {len(klammer_stems)} Klammerstämme ausgeblendet)")
+            
             if doc_count > 0:
                 if doc_count == stamm_count: st.success("✅ OK")
                 else: st.error(f"⚠️ Diff: {doc_count - stamm_count}")
+            else: st.info("Soll fehlt")
             
         with c3:
             st.metric("Polter", len(data.get('polter', [])))
 
-        with st.expander("Details Stämme"):
-            st.dataframe(pd.DataFrame(data.get('staemme', [])))
+        with st.expander(f"Gültige Stämme ({len(valid_stems)})"):
+            st.dataframe(pd.DataFrame(valid_stems))
+            
+        if klammer_stems:
+            with st.expander(f"🗑️ Ausgefilterte Klammerstämme ({len(klammer_stems)})"):
+                st.dataframe(pd.DataFrame(klammer_stems))
 
         if st.button("💾 Speichern"):
             with st.spinner("Speichere..."):
@@ -365,14 +388,14 @@ with tab2:
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                         valid_pts = []
                         for _, row in group.iterrows():
-                            # Wenn Lat/Lon gültige Zahlen sind, zeige sie
-                            if isinstance(row['Lat'], (int, float)) and row['Lat'] != 0:
-                                valid_pts.append({"lat": row['Lat'], "lon": row['Lon'], "info": f"P{row['Polter_Nr']}"})
-                        
+                            try:
+                                lat, lon = float(row['Lat']), float(row['Lon'])
+                                if lat != 0: 
+                                    valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
+                            except: pass
                         if valid_pts:
                             map_df = pd.DataFrame(valid_pts)
                             map_key = f"map_{revier}_{los}_{datum}"
-                            # Automatischer Zoom auf die Punkte
                             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=13)
                             for _, pt in map_df.iterrows():
                                 folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
