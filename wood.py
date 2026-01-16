@@ -248,12 +248,12 @@ with tab1:
                         Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
                         --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
-                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
+                        Suche nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
                         
                         --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
-                        WICHTIG: Die Tabelle ist ZWEISPALTIG. Lese beide Spalten!
-                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen).
+                        WICHTIG: Die Tabelle ist oft ZWEISPALTIG. Lese beide Spalten!
+                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
                         
                         --- AUFGABE 3: POLTER & GPS ---
                         Suche Polter-Listen mit GPS ($48^{\circ}...$).
