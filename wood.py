@@ -65,6 +65,7 @@ def get_spreadsheet():
         return None
 
 # --- DATEN SPEICHERN ---
+# --- DATEN SPEICHERN (FIX FÜR DEUTSCHE TABELLEN) ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
@@ -77,6 +78,12 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
+    # Helper: Punkt zu Komma für Google Sheets (damit es als Zahl erkannt wird)
+    def to_german_float(val):
+        if isinstance(val, (int, float)):
+            return str(val).replace('.', ',')
+        return str(val)
+
     # BLATT 1: POLTER
     try: ws_polter = sh.worksheet("Polter_Uebersicht")
     except: ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=10); ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link"])
@@ -86,8 +93,16 @@ def save_to_sheets(data):
         fm = clean_number(p.get('fm', 0))
         lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
-        polter_rows.append([timestamp, datum_aufnahme, los, revier, p.get('nr'), fm, str(lat), str(lon), link])
-    if polter_rows: ws_polter.append_rows(polter_rows)
+        
+        # HIER DER FIX: to_german_float()
+        polter_rows.append([
+            timestamp, datum_aufnahme, los, revier, p.get('nr'), 
+            to_german_float(fm),      # Fm mit Komma
+            str(lat).replace('.',','), # Koordinaten auch mit Komma für Excel-Kompatibilität? Oder Punkt lassen für Maps?
+            str(lon).replace('.',','), # Meistens besser Punkt für Maps, aber Komma für Tabelle. Ich mache hier mal Komma.
+            link
+        ])
+    if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
     # BLATT 2: EINZELSTÄMME
     staemme_data = data.get('staemme', [])
@@ -100,8 +115,16 @@ def save_to_sheets(data):
             l = clean_number(s.get('l', 0))
             d = clean_number(s.get('d', 0))
             fm = clean_number(s.get('fm', 0), is_volume=True)
-            stamm_rows.append([timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), l, d, s.get('klasse', ''), fm])
-        if stamm_rows: ws_stamm.append_rows(stamm_rows)
+            
+            # HIER DER FIX: to_german_float()
+            stamm_rows.append([
+                timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), 
+                to_german_float(l), 
+                to_german_float(d), 
+                s.get('klasse', ''), 
+                to_german_float(fm)
+            ])
+        if stamm_rows: ws_stamm.append_rows(stamm_rows, value_input_option='USER_ENTERED')
 
     return True
 
