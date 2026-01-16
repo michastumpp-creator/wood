@@ -1,1 +1,6 @@
-
+streamlit
+google-genai
+pandas
+folium
+streamlit-folium
+Pillow
