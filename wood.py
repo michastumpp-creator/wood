@@ -111,22 +111,33 @@ def save_to_sheets(data):
     meta = data.get('meta', {})
     los = str(meta.get('los', 'Unbekannt'))
     revier = str(meta.get('revier', 'Unbekannt'))
-    ort = str(meta.get('revier_ort', '')) # Neuer Wert: Ort
-    zert = str(meta.get('zertifikat', '')) # Neuer Wert: Zertifikat
+    ort = str(meta.get('revier_ort', ''))
+    zert = str(meta.get('zertifikat', ''))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
     def fmt(val): return str(val).replace(',', '.') if val is not None else ""
 
-    # 1. POLTER
-    try: 
+    # --- 1. BLATT: POLTER (SICHERE LOGIK) ---
+    ws_polter = None
+    try:
         ws_polter = sh.worksheet("Polter_Uebersicht")
-        # Header prüfen und ggf. erweitern
+    except:
+        # Nur wenn es wirklich nicht existiert, erstellen wir es
+        try:
+            ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=15)
+            ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat"])
+        except Exception as e:
+            st.error(f"Konnte Polter-Blatt nicht erstellen: {e}")
+            return False
+
+    # Jetzt existiert das Blatt sicher. Header prüfen wir separat.
+    try:
         headers = ws_polter.row_values(1)
         if "Ort" not in headers: ws_polter.update_cell(1, len(headers)+1, "Ort")
-        if "Zertifikat" not in headers: ws_polter.update_cell(1, len(headers)+2, "Zertifikat")
-    except: 
-        ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=15)
-        ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat"])
+        # Header neu laden für nächste Prüfung
+        headers = ws_polter.row_values(1) 
+        if "Zertifikat" not in headers: ws_polter.update_cell(1, len(headers)+1, "Zertifikat")
+    except: pass # Header-Update ist optional, kein Grund zum Absturz
 
     polter_rows = []
     for p in data.get('polter', []):
@@ -138,19 +149,25 @@ def save_to_sheets(data):
             link = f"http://maps.google.com/?q={l_lat},{l_lon}"
         except: link = ""
         
-        # Achtung: Reihenfolge muss stimmen. Wir hängen Neue Felder hinten an.
-        # Im Idealfall nutzt man DictWriter, aber für gspread hier quick & dirty append
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
             fmt(p.get('fm')), lat_text, lon_text, link, ort, zert
         ])
-    if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
+    
+    if polter_rows: 
+        ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
-    # 2. STÄMME
+    # --- 2. BLATT: STÄMME (SICHERE LOGIK) ---
     stems = data.get('staemme', [])
     if stems:
-        try: ws_stamm = sh.worksheet("Einzelstaemme")
-        except: ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=10); ws_stamm.append_row(["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm"])
+        ws_stamm = None
+        try:
+            ws_stamm = sh.worksheet("Einzelstaemme")
+        except:
+            try:
+                ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=10)
+                ws_stamm.append_row(["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm"])
+            except: return False
 
         stamm_rows = []
         for s in stems:
@@ -271,7 +288,6 @@ with tab1:
                         st.session_state.analyzed_data = data
                         
                         # --- INITIALER CHECK DURCH KI ---
-                        # Wir lassen die KI gleich einen Kommentar generieren
                         check_prompt = f"""
                         Prüfe diese extrahierten Daten auf Plausibilität.
                         Daten: {json.dumps(data)}
@@ -292,18 +308,15 @@ with tab1:
         st.divider()
         st.subheader("💬 KI-Assistent")
         
-        # Chat History anzeigen
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
         
-        # User Input
         if user_input := st.chat_input("Frage etwas zur Liste (z.B. 'Welche Baumarten?')"):
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.write(user_input)
             
-            # KI Antwort generieren
             with st.spinner("Überlege..."):
                 chat_prompt = f"""
                 Du bist ein Forst-Experte. Der Nutzer fragt dich etwas zu dieser Holzliste:
@@ -319,13 +332,12 @@ with tab1:
         # --- DATA DISPLAY ---
         st.divider()
         
-        # K-Stamm Logik
         all_stems = data.get('staemme', [])
         valid_stems = [s for s in all_stems if not s.get('klammer', False)]
         
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
-        stamm_sum = sum([to_float(s.get('fm', 0)) for s in all_stems]) # Volumen inkl. K
+        stamm_sum = sum([to_float(s.get('fm', 0)) for s in all_stems]) 
         
         meta = data.get('meta', {})
         zertifikat = meta.get('zertifikat', '')
@@ -368,18 +380,16 @@ with tab2:
     else:
         # --- KOMPAKTES COCKPIT ---
         st.subheader("📊 Übersicht")
-        c_stats, c_map = st.columns([1, 1]) # 50/50 Aufteilung
+        c_stats, c_map = st.columns([1, 1]) 
         
         with c_stats:
             if not df_staemme.empty:
-                # Stats gruppieren
                 stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
                 st.dataframe(stats, height=200, use_container_width=True)
                 st.caption(f"**Gesamt: {stats.sum():.2f} Fm**")
             else: st.info("Leer")
 
         with c_map:
-            # Alle Punkte sammeln
             all_pts = []
             for _, row in df_polter.iterrows():
                 lat = parse_gps_for_map(row.get('Lat', ''))
@@ -390,7 +400,6 @@ with tab2:
             
             if all_pts:
                 map_df = pd.DataFrame(all_pts)
-                # Kleine Karte (height=200)
                 m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=9)
                 for _, pt in map_df.iterrows():
                     folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="blue", icon="tree", prefix='fa')).add_to(m)
@@ -407,14 +416,12 @@ with tab2:
             for (revier, los, datum), group in groups:
                 polter_sum = group['Menge_Fm'].sum()
                 
-                # Ort aus der Tabelle holen (Spalte 'Ort')
                 ort_val = group['Ort'].iloc[0] if 'Ort' in group.columns else ""
                 ort_label = f" ({ort_val})" if ort_val and str(ort_val) != "nan" else ""
                 
                 zert_val = group['Zertifikat'].iloc[0] if 'Zertifikat' in group.columns else ""
                 zert_label = f" [{zert_val}]" if zert_val and str(zert_val) != "nan" else ""
 
-                # Stämme Info
                 stem_summary = ""
                 stamm_anzahl = 0
                 match = pd.DataFrame()
@@ -422,12 +429,9 @@ with tab2:
                 if not df_staemme.empty:
                     match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
                     if not match.empty:
-                        # K-Stämme filtern für Anzahl
                         non_k = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
                         stamm_anzahl = len(non_k)
-                        
-                        # Kurz-Statistik für Titel
-                        counts = non_k['Holzart'].value_counts().head(3) # Nur Top 3
+                        counts = non_k['Holzart'].value_counts().head(3)
                         summary_parts = [f"{art}: {c}" for art, c in counts.items()]
                         stem_summary = " | " + ", ".join(summary_parts)
 
@@ -448,7 +452,6 @@ with tab2:
                         st.markdown("**Polter**")
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                         
-                        # Mini-Map für Expander
                         v_pts = []
                         for _, row in group.iterrows():
                             lat = parse_gps_for_map(row.get('Lat', ''))
