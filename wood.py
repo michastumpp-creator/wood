@@ -23,13 +23,15 @@ if 'last_upload' not in st.session_state:
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
     """
-    Reinigt Zahlen und repariert "Google Sheets Integer Fehler".
-    Macht aus 137 -> 1.37 (wenn is_volume=True)
+    Reinigt Zahlen.
+    Macht aus 1,37 -> 1.37
     """
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
+        # 1. Komma zu Punkt
         clean = value.replace(',', '.')
+        # 2. Alles weg was keine Zahl/Punkt ist
         clean = re.sub(r'[^\d.]', '', clean)
         try:
             val = float(clean)
@@ -38,37 +40,52 @@ def clean_number(value, is_volume=False):
     else:
         return 0.0
 
-    # REPARATUR-LOGIK (Nur wenn aktiviert)
-    if is_volume and val > 0:
-        # Fall 1: Zahl ist riesig (z.B. 137 statt 1.37)
-        # Ein Stamm/Polter hat selten > 50 Fm. Wenn wir 908 haben, ist es 9.08
-        if val > 50: 
-            return val / 100.0
+    # Volumen-Plausibilität (Ein Stamm hat selten > 20 Fm)
+    if is_volume and val > 20.0:
+        if 0.5 < (val / 100) < 20: return val / 100
+        if 0.5 < (val / 10) < 20: return val / 10
             
     return val
 
-# --- HELFER: KOORDINATEN RETTEN ---
+# --- HELFER: KOORDINATEN RETTEN (Deutschland-Filter) ---
 def fix_coordinates(lat, lon):
-    # Hilfsfunktion, um eine einzelne Koordinate zu retten
-    def repair_gps_val(v):
-        v = clean_number(v)
+    
+    def force_germany_gps(val):
+        """Zwingt eine Zahl in den Bereich von DE Koordinaten"""
+        v = clean_number(val)
         if v == 0: return 0.0
-        # Wenn die Zahl riesig ist (z.B. 48285197), teilen wir bis sie passt
-        # Breitengrad DE ist ca 47-55, Längengrad ca 6-15
-        while v > 100:
+        
+        # Solange die Zahl zu groß ist (z.B. 4829583), teilen wir durch 10
+        # Latitude DE max ca 55, Lon max ca 15.
+        # Wir nehmen 180 als Obergrenze für "Geografisch möglich"
+        while v > 180:
             v = v / 10.0
         return v
 
-    l1 = repair_gps_val(lat)
-    l2 = repair_gps_val(lon)
+    l1 = force_germany_gps(lat)
+    l2 = force_germany_gps(lon)
     
     if l1 == 0 and l2 == 0: return 0.0, 0.0
 
-    # Latitude (Breite DE) ist immer größer (~48) als Longitude (~9)
-    if l1 > l2:
-        return l1, l2
+    # Wer ist wer?
+    # Latitude (Breite) DE: ca. 47 - 55
+    # Longitude (Länge) DE: ca. 6 - 15
+    
+    final_lat, final_lon = 0.0, 0.0
+    
+    # Check: Welcher Wert passt in welches Fenster?
+    if 40 < l1 < 60:
+        final_lat = l1
+        final_lon = l2
+    elif 40 < l2 < 60:
+        final_lat = l2
+        final_lon = l1
     else:
-        return l2, l1 # Tausch
+        # Fallback: Der größere Wert ist Lat (in DE)
+        if l1 > l2: return l1, l2
+        else: return l2, l1
+        
+    return final_lat, final_lon
 
 # --- GOOGLE SHEETS VERBINDUNG ---
 def get_spreadsheet():
@@ -99,8 +116,7 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    def to_german(val):
-        return str(val).replace('.', ',')
+    def to_german(val): return str(val).replace('.', ',')
 
     # BLATT 1: POLTER
     try: ws_polter = sh.worksheet("Polter_Uebersicht")
@@ -163,49 +179,36 @@ def delete_entry(los, revier, datum_aufnahme):
         st.error(f"Fehler: {e}")
         return False
 
-# --- NEU: DATEN LADEN & REPARIEREN ---
+# --- DATEN LADEN & REPARIEREN ---
 def load_data_frames():
     sh = get_spreadsheet()
     if not sh: return pd.DataFrame(), pd.DataFrame()
     
-    # 1. POLTER LADEN
+    # Polter
     try:
         data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
         df_polter = pd.DataFrame(data_p)
-        
-        # WICHTIG: Hier aktivieren wir die Reparatur!
         if not df_polter.empty:
             if 'Menge_Fm' in df_polter.columns:
-                # Hier sagen wir explizit is_volume=True
                 df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
             
-            # Koordinaten fixen
+            # Koordinaten fixen (Zeilenweise)
             if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
-                # Wir wenden fix_coordinates zeilenweise an
                 coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
-                # Das gibt ein Tupel (Lat, Lon) zurück, wir müssen es splitten
                 df_polter['Lat'] = [c[0] for c in coords]
                 df_polter['Lon'] = [c[1] for c in coords]
-                
-    except Exception as e: 
-        st.error(f"Polter Fehler: {e}")
-        df_polter = pd.DataFrame()
+    except: df_polter = pd.DataFrame()
 
-    # 2. STÄMME LADEN
+    # Stämme
     try:
         data_s = sh.worksheet("Einzelstaemme").get_all_records()
         df_staemme = pd.DataFrame(data_s)
-        
         if not df_staemme.empty:
-            # Volumen reparieren
             if 'Volumen_Fm' in df_staemme.columns:
                 df_staemme['Volumen_Fm'] = df_staemme['Volumen_Fm'].apply(lambda x: clean_number(x, is_volume=True))
-            
-            # Andere Spalten normal bereinigen
             for col in ['Laenge', 'Durchmesser']:
                 if col in df_staemme.columns:
                     df_staemme[col] = df_staemme[col].apply(clean_number)
-
     except: df_staemme = pd.DataFrame()
     
     return df_polter, df_staemme
@@ -240,28 +243,35 @@ with tab1:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
                 with st.spinner("Analyse läuft..."):
                     try:
+                        # --- PROMPT ---
                         prompt = """
-                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument.
+                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
-                        --- AUFGABE 1: EINZELSTÄMME FINDEN ---
+                        --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
+                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
+                        
+                        --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
-                        WICHTIG: Tabelle ist ZWEISPALTIG (Daten links UND rechts).
+                        WICHTIG: Die Tabelle ist ZWEISPALTIG. Lese beide Spalten!
+                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen).
                         
-                        Spalten-Kürzel: "WNr", "Lä", "DoR", "FmoR" (Volumen).
+                        --- AUFGABE 3: POLTER & GPS ---
+                        Suche Polter-Listen mit GPS ($48^{\circ}...$).
+                        Rechne DMS in Dezimalgrad um (z.B. 48.1234).
                         
-                        --- AUFGABE 2: SUMMEN & POLTER ---
-                        - Suche auf Seite 1/2 nach "Gesamtmenge".
-                        - Suche Polter-Listen mit GPS.
-
                         --- JSON STRUKTUR ---
                         {
-                            "meta": {"los": "String", "revier": "String", "datum": "String", "dokument_summe": Float},
+                            "meta": {
+                                "los": "String", "revier": "String", "datum": "String", 
+                                "dokument_summe": Float, 
+                                "dokument_anzahl_staemme": Int
+                            },
                             "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
                             "staemme": [{"wnr": "String", "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
                         }
                         """
                         response = client.models.generate_content(
-                            model="gemini-3-flash-preview", 
+                            model="gemini-3-flash-preview", # Oder 2.0 Flash wenn nicht verfügbar
                             contents=[prompt, content],
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
@@ -277,17 +287,47 @@ with tab1:
         data = st.session_state.analyzed_data
         
         st.divider()
-        st.subheader("🕵️ Prüfung")
-        doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
-        stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
+        st.subheader("🕵️ Prüfung & Validierung")
         
+        # Daten holen
+        doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
+        doc_count = int(clean_number(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
+        
+        stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
+        stamm_count = len(data.get('staemme', []))
+        
+        # 3 Spalten für Checks
         c1, c2, c3 = st.columns(3)
-        c1.metric("Dokument", f"{doc_sum:.2f} Fm")
-        c2.metric("Gefunden", f"{stamm_sum:.2f} Fm")
-        if abs(doc_sum - stamm_sum) < 1.0 and doc_sum > 0: c3.success("✅ Stimmt überein")
-        else: c3.warning("⚠️ Abweichung")
+        
+        # Check 1: Festmeter
+        with c1:
+            st.markdown("**Festmeter-Check**")
+            st.write(f"Soll: {doc_sum:.2f} Fm")
+            st.write(f"Ist: {stamm_sum:.2f} Fm")
+            diff = abs(doc_sum - stamm_sum)
+            if doc_sum > 0:
+                if diff < 1.0: st.success(f"✅ OK (Diff: {diff:.2f})")
+                else: st.error(f"⚠️ Fehler (Diff: {diff:.2f})")
+            else: st.info("Keine Soll-Menge gefunden")
+            
+        # Check 2: Anzahl Stämme
+        with c2:
+            st.markdown("**Stückzahl-Check**")
+            st.write(f"Soll: {doc_count} Stk")
+            st.write(f"Ist: {stamm_count} Stk")
+            if doc_count > 0:
+                if doc_count == stamm_count: st.success("✅ Passt genau")
+                else: 
+                    diff_count = doc_count - stamm_count
+                    st.error(f"⚠️ Es fehlen {diff_count} Stämme!" if diff_count > 0 else f"⚠️ Zu viele ({abs(diff_count)})!")
+            else: st.info("Keine Soll-Anzahl gefunden")
+            
+        # Check 3: Polter
+        with c3:
+            st.markdown("**Polter**")
+            st.metric("Gefunden", len(data.get('polter', [])))
 
-        with st.expander("Details"):
+        with st.expander("Details Stämme"):
             st.dataframe(pd.DataFrame(data.get('staemme', [])))
 
         if st.button("💾 Speichern"):
@@ -312,12 +352,17 @@ with tab2:
         valid_pts = []
         for _, row in df_polter.iterrows():
             try:
-                lat, lon = row.get('Lat', 0), row.get('Lon', 0)
-                if lat != 0:
+                # Hier greift die intelligente Reparatur
+                lat, lon = fix_coordinates(row.get('Lat',0), row.get('Lon',0))
+                
+                # Filter: Nur anzeigen wenn in DE (Lat > 47)
+                if lat > 47:
                     valid_pts.append({"lat": lat, "lon": lon, "info": f"Revier {row['Revier']} | P{row['Polter_Nr']}"})
             except: pass
+            
         if valid_pts:
             map_df = pd.DataFrame(valid_pts)
+            # Zoom auf Mittelpunkt der Daten
             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=11)
             for _, pt in map_df.iterrows():
                 folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
