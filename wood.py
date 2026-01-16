@@ -10,6 +10,8 @@ from google.oauth2 import service_account
 import gspread
 from datetime import datetime
 import re
+import fitz  # PyMuPDF für PDF-Highlighting
+import io
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
@@ -41,7 +43,7 @@ def clean_number(value, is_volume=False):
         if 0.5 < (val / 10) < 20: return val / 10
     return val
 
-# --- HELFER: GPS MATHE-GENIE (DMS -> DEZIMAL) ---
+# --- HELFER: GPS (DMS -> DEZIMAL) ---
 def parse_dms_to_decimal(val):
     if isinstance(val, (int, float)): return float(val)
     val_str = str(val).strip()
@@ -69,20 +71,72 @@ def fix_coordinates(lat, lon):
     l2 = scale_down(l2)
 
     final_lat, final_lon = 0.0, 0.0
-    # Deutschland Lat ~47-55, Lon ~6-15
+    # Latitude DE ~47-55
     is_l1_lat = (47 <= l1 <= 55)
-    is_l1_lon = (5 <= l1 <= 15)
     is_l2_lat = (47 <= l2 <= 55)
-    is_l2_lon = (5 <= l2 <= 15)
     
-    if is_l1_lat and is_l2_lon: final_lat, final_lon = l1, l2
-    elif is_l2_lat and is_l1_lon: final_lat, final_lon = l2, l1
+    if is_l1_lat: final_lat, final_lon = l1, l2
+    elif is_l2_lat: final_lat, final_lon = l2, l1
     else:
+        # Notfall-Logik
         if abs(l1 - 48) < abs(l2 - 48): final_lat, final_lon = l1, l2
         else: final_lat, final_lon = l2, l1
         while final_lon > 15.0: final_lon /= 10.0
             
     return final_lat, final_lon
+
+# --- NEU: PDF MARKIEREN ---
+def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl):
+    """
+    Sucht Text im PDF, markiert ihn bunt und gibt Bilder zurück.
+    Summe = Gelb
+    Anzahl = Blau
+    """
+    # Datei-Pointer zurücksetzen
+    uploaded_file.seek(0)
+    
+    # PDF öffnen (aus Bytes)
+    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+    images = []
+
+    # Wir suchen nach dem String (z.B. "47,64")
+    # Da clean_number floats macht (47.64), müssen wir es für die Suche evtl. wieder eindeutschen
+    search_terms = []
+    if text_summe > 0:
+        # Suche nach "47,64" und "47.64"
+        search_terms.append({"val": str(text_summe).replace('.', ','), "color": (1, 1, 0)}) # Gelb
+        search_terms.append({"val": str(text_summe), "color": (1, 1, 0)}) 
+    
+    if text_anzahl > 0:
+        search_terms.append({"val": str(int(text_anzahl)), "color": (0, 1, 1)}) # Türkis/Blau
+
+    for page_num, page in enumerate(doc):
+        # Nur Seite 1-3 scannen um Performance zu sparen
+        if page_num > 2: break
+        
+        found_on_page = False
+        
+        for item in search_terms:
+            text = item["val"]
+            color = item["color"]
+            
+            # Suche alle Vorkommen
+            quads = page.search_for(text)
+            
+            if quads:
+                found_on_page = True
+                for quad in quads:
+                    # Highlight hinzufügen
+                    annot = page.add_highlight_annot(quad)
+                    annot.set_colors(stroke=color)
+                    annot.update()
+
+        # Seite als Bild rendern
+        pix = page.get_pixmap(dpi=150)
+        img_data = pix.tobytes("png")
+        images.append(Image.open(io.BytesIO(img_data)))
+
+    return images
 
 # --- GOOGLE SHEETS VERBINDUNG ---
 def get_spreadsheet():
@@ -181,7 +235,6 @@ def load_data_frames():
     sh = get_spreadsheet()
     if not sh: return pd.DataFrame(), pd.DataFrame()
     
-    # Polter
     try:
         data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
         df_polter = pd.DataFrame(data_p)
@@ -194,7 +247,6 @@ def load_data_frames():
                 df_polter['Lon'] = [c[1] for c in coords]
     except: df_polter = pd.DataFrame()
 
-    # Stämme
     try:
         data_s = sh.worksheet("Einzelstaemme").get_all_records()
         df_staemme = pd.DataFrame(data_s)
@@ -238,12 +290,14 @@ with tab1:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
                 with st.spinner("Analyse läuft..."):
                     try:
-                        # --- PROMPT (UNVERÄNDERT) ---
+                        # --- PROMPT ---
                         prompt = """
                         Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
                         --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
-                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
+                        Suche auf Seite 1 nach:
+                        - "Gesamtmenge" (Fm)
+                        - "Stämme gezählt" (oder "Waldnummern gezählt").
                         
                         --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
@@ -251,8 +305,7 @@ with tab1:
                         Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
                         
                         --- AUFGABE 3: POLTER & GPS ---
-                        Suche Polter-Listen mit GPS. 
-                        ACHTUNG: Format ist oft DMS (Grad Minute Sekunde). Extrahiere den String exakt so wie er da steht, z.B. "48°17'06,71".
+                        Suche Polter-Listen mit GPS. Extrahiere DMS String z.B. "48°17'06,71".
                         
                         --- JSON STRUKTUR ---
                         {
@@ -287,6 +340,22 @@ with tab1:
         doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(clean_number(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
         
+        # --- PDF VISUALISIERUNG ---
+        if uploaded_file.type == "application/pdf":
+            with st.expander("📄 PDF-Check: Wo stehen die Zahlen?", expanded=True):
+                # Wir suchen die Zahlen im PDF und malen sie an
+                marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count)
+                
+                # Legende
+                st.caption("🟡 Gelb = Gefundene Festmeter-Summe | 🔵 Blau = Gefundene Stamm-Anzahl")
+                
+                # Bilder anzeigen (nur Seite 1-2 wo die Summen meist stehen)
+                cols = st.columns(len(marked_images))
+                for idx, img in enumerate(marked_images):
+                    with cols[idx]:
+                        st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
+        # --------------------------
+
         stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
         stamm_count = len(data.get('staemme', []))
         
@@ -297,24 +366,21 @@ with tab1:
             st.write(f"Ist: {stamm_sum:.2f} Fm")
             diff = abs(doc_sum - stamm_sum)
             if doc_sum > 0:
-                if diff < 1.0: st.success(f"✅ OK (Diff: {diff:.2f})")
-                else: st.error(f"⚠️ Fehler (Diff: {diff:.2f})")
-            else: st.info("Keine Soll-Menge gefunden")
+                if diff < 1.0: st.success(f"✅ OK")
+                else: st.error(f"⚠️ Diff: {diff:.2f}")
+            else: st.info("Soll fehlt")
             
         with c2:
             st.markdown("**Stückzahl-Check**")
-            st.write(f"Soll: {doc_count} Stk")
-            st.write(f"Ist: {stamm_count} Stk")
+            st.write(f"Soll: {doc_count}")
+            st.write(f"Ist: {stamm_count}")
             if doc_count > 0:
-                if doc_count == stamm_count: st.success("✅ Passt genau")
-                else: 
-                    diff_count = doc_count - stamm_count
-                    st.error(f"⚠️ Es fehlen {diff_count} Stämme!" if diff_count > 0 else f"⚠️ Zu viele ({abs(diff_count)})!")
-            else: st.info("Keine Soll-Anzahl gefunden")
+                if doc_count == stamm_count: st.success("✅ OK")
+                else: st.error(f"⚠️ Diff: {doc_count - stamm_count}")
+            else: st.info("Soll fehlt")
             
         with c3:
-            st.markdown("**Polter**")
-            st.metric("Gefunden", len(data.get('polter', [])))
+            st.metric("Polter", len(data.get('polter', [])))
 
         with st.expander("Details Stämme"):
             st.dataframe(pd.DataFrame(data.get('staemme', [])))
@@ -337,26 +403,20 @@ with tab2:
         st.info("Keine Daten.")
     else:
         st.subheader("📂 Akten")
-        
         if 'Los_Nr' in df_polter.columns:
             groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
             
             for (revier, los, datum), group in groups:
                 polter_sum = group['Menge_Fm'].sum()
-                
-                # Zähle Stämme für dieses Los (falls vorhanden)
                 stamm_anzahl = 0
                 match = pd.DataFrame()
                 if not df_staemme.empty:
                     match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
                     stamm_anzahl = len(match)
 
-                # EXPANDER TITEL MIT STAMMANZAHL
                 title = f"🌲 {revier} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm | 🪵 {stamm_anzahl} Stk"
                 
                 with st.expander(title):
-                    
-                    # LÖSCH BUTTON
                     col_del, col_info = st.columns([1, 4])
                     with col_del:
                         if st.button(f"🗑️ Liste Löschen", key=f"del_{revier}_{los}_{datum}"):
@@ -366,15 +426,10 @@ with tab2:
                                     st.cache_data.clear()
                                     st.rerun()
 
-                    # INHALT DES EXPANDERS
                     c1, c2 = st.columns([1, 1])
-                    
-                    # LINKS: Polter & Karte
                     with c1:
                         st.markdown("**Polter & GPS**")
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
-                        
-                        # MINI-KARTE NUR FÜR DIESES LOS
                         valid_pts = []
                         for _, row in group.iterrows():
                             try:
@@ -382,17 +437,13 @@ with tab2:
                                 if lat > 47:
                                     valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
                             except: pass
-                        
                         if valid_pts:
                             map_df = pd.DataFrame(valid_pts)
-                            # Eindeutiger Key für die Map, damit sie sich nicht mit anderen beißt
                             map_key = f"map_{revier}_{los}_{datum}"
                             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=13)
                             for _, pt in map_df.iterrows():
                                 folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
                             st_folium(m, width="100%", height=250, key=map_key)
-                    
-                    # RECHTS: Stämme
                     with c2:
                         st.markdown(f"**Einzelstämme ({stamm_anzahl}):**")
                         if not match.empty:
