@@ -8,116 +8,84 @@ from streamlit_folium import st_folium
 from PIL import Image
 from google.oauth2 import service_account
 import gspread
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 from datetime import datetime
+import re
 
 # --- KONFIGURATION ---
-st.set_page_config(page_title="Forst-Manager Pro", page_icon="🌲", layout="wide")
+st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
 
 # --- SESSION STATE ---
 if 'analyzed_data' not in st.session_state:
     st.session_state.analyzed_data = None
 if 'last_upload' not in st.session_state:
     st.session_state.last_upload = None
-if 'current_file_link' not in st.session_state:
-    st.session_state.current_file_link = None
 
-# --- HELFER: ZAHLEN BEREINIGEN (Aggressiv) ---
+# --- HELFER: ZAHLEN BEREINIGEN (Sehr streng) ---
 def clean_number(value):
     """
-    Wandelt alles in Float um.
-    '1,50' -> 1.50
-    '1.50' -> 1.50
+    Macht aus JEDEM Input einen sauberen Float-Wert.
+    '1,50' -> 1.5
+    '1.50' -> 1.5
+    'ca. 10,5' -> 10.5
     """
     if isinstance(value, (int, float)):
         return float(value)
+    
     if isinstance(value, str):
-        # Ersetze Komma durch Punkt
+        # 1. Komma zu Punkt
         clean = value.replace(',', '.')
-        # Entferne alles außer Zahlen und Punkt
-        clean = "".join(c for c in clean if c.isdigit() or c == '.')
+        # 2. Alle Buchstaben entfernen, nur Zahlen und Punkt behalten
+        # Regex: Behalte Ziffern und Punkt
+        clean = re.sub(r'[^\d.]', '', clean)
+        
+        # 3. Falls zwei Punkte da sind (Fehler), nimm den ersten
+        if clean.count('.') > 1:
+            clean = clean.split('.')[0] + '.' + clean.split('.')[1]
+
         try:
             return float(clean)
         except:
             return 0.0
     return 0.0
 
-# --- AUTHENTIFIZIERUNG ---
-def get_creds():
+# --- GOOGLE SHEETS VERBINDUNG ---
+def get_spreadsheet():
     if "gcp_service_account" not in st.secrets:
         st.error("Secrets fehlen!")
         return None
-    return service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-    )
-
-# --- GOOGLE DRIVE: DATEI HOCHLADEN ---
-def upload_file_to_drive(uploaded_file, filename):
-    """Lädt das PDF/Bild physisch in Drive hoch und gibt den Link zurück"""
     try:
-        creds = get_creds()
-        service = build('drive', 'v3', credentials=creds)
-        folder_id = st.secrets["DRIVE_FOLDER_ID"]
-        
-        file_metadata = {
-            'name': filename,
-            'parents': [folder_id]
-        }
-        
-        # Mime-Type erkennen
-        mimetype = uploaded_file.type
-        
-        # Stream erstellen
-        media = MediaIoBaseUpload(uploaded_file, mimetype=mimetype)
-        
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, webViewLink'
-        ).execute()
-        
-        return file.get('webViewLink')
-        
-    except Exception as e:
-        st.error(f"Fehler beim Datei-Upload: {e}")
-        return "Upload fehlgeschlagen"
-
-# --- GOOGLE SHEETS VERBINDUNG ---
-def get_spreadsheet():
-    try:
-        creds = get_creds()
+        creds = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
         client = gspread.authorize(creds)
         return client.open("Forst_Datenbank")
     except Exception as e:
         st.error(f"Fehler beim Öffnen der Tabelle: {e}")
         return None
 
-def save_to_sheets(data, file_link):
+def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # Sicherheits-Check: Falls data Liste ist, umwandeln
+    # Fallback falls KI Liste statt Dict liefert
     if isinstance(data, list):
          data = {"polter": data, "meta": {}, "staemme": []}
 
     meta = data.get('meta', {})
-    los = meta.get('los', 'Unbekannt')
-    revier = meta.get('revier', 'Unbekannt')
-    datum_aufnahme = meta.get('datum', timestamp.split(' ')[0])
+    los = str(meta.get('los', 'Unbekannt'))
+    revier = str(meta.get('revier', 'Unbekannt'))
+    datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
     # --- BLATT 1: POLTER ---
     try:
         ws_polter = sh.worksheet("Polter_Uebersicht")
     except:
-        ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=11)
-        ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Original_Datei"])
+        # Erstelle Blatt neu (OHNE Datei-Link Spalte)
+        ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=10)
+        ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link"])
 
     polter_rows = []
     for p in data.get('polter', []):
@@ -125,7 +93,9 @@ def save_to_sheets(data, file_link):
         lat = clean_number(p.get('lat', 0))
         lon = clean_number(p.get('lon', 0))
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
-        polter_rows.append([timestamp, datum_aufnahme, los, revier, p.get('nr'), fm, str(lat), str(lon), link, file_link])
+        
+        # Speichere Zahlen explizit als String mit Punkt für Google Sheets Import
+        polter_rows.append([timestamp, datum_aufnahme, los, revier, p.get('nr'), fm, str(lat), str(lon), link])
     
     if polter_rows:
         ws_polter.append_rows(polter_rows)
@@ -136,15 +106,16 @@ def save_to_sheets(data, file_link):
         try:
             ws_stamm = sh.worksheet("Einzelstaemme")
         except:
-            ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=11)
-            ws_stamm.append_row(["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm", "Original_Datei"])
+            # Erstelle Blatt neu (OHNE Datei-Link Spalte)
+            ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=10)
+            ws_stamm.append_row(["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm"])
 
         stamm_rows = []
         for s in staemme_data:
             l = clean_number(s.get('l', 0))
             d = clean_number(s.get('d', 0))
             fm = clean_number(s.get('fm', 0))
-            stamm_rows.append([timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), l, d, s.get('klasse', ''), fm, file_link])
+            stamm_rows.append([timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), l, d, s.get('klasse', ''), fm])
         
         if stamm_rows:
             ws_stamm.append_rows(stamm_rows)
@@ -170,9 +141,9 @@ def load_data_frames():
     return df_polter, df_staemme
 
 # --- APP START ---
-st.title("🌲 Forst-Verwaltung Pro")
+st.title("🌲 Forst-Verwaltung")
 
-tab1, tab2 = st.tabs(["📸 Scan & Erfassung", "🗃️ Bestand (Übersicht)"])
+tab1, tab2 = st.tabs(["📸 Scan & Erfassung", "🗃️ Bestand"])
 
 # --- TAB 1: SCANNER ---
 with tab1:
@@ -184,13 +155,10 @@ with tab1:
     uploaded_file = st.file_uploader("Holzliste (PDF)", type=["pdf", "jpg", "png"])
 
     if uploaded_file:
-        # Reset bei neuer Datei
         if st.session_state.last_upload != uploaded_file.name:
             st.session_state.analyzed_data = None
-            st.session_state.current_file_link = None
             st.session_state.last_upload = uploaded_file.name
 
-        # Vorschau
         content = None
         if uploaded_file.type == "application/pdf":
             st.info(f"📄 PDF: {uploaded_file.name}")
@@ -203,20 +171,16 @@ with tab1:
         # ANALYSE
         if st.session_state.analyzed_data is None:
             if st.button("🚀 Analysieren"):
-                with st.spinner("Gemini arbeitet (Zahlen-Fix aktiv)..."):
+                with st.spinner("Gemini arbeitet (Kommas -> Punkte)..."):
                     try:
                         prompt = """
                         Analysiere diese Holzliste.
                         
-                        WICHTIGSTE REGEL:
-                        Wandle ALLE Komma-Zahlen (1,50) in Punkt-Zahlen (1.50) um. Das JSON darf keine Kommas als Dezimaltrenner haben.
+                        REGELN:
+                        1. Wandle ALLE Komma-Zahlen (1,50) in Punkt-Zahlen (1.50) um.
+                        2. JSON Format (keine Listen als Root).
                         
-                        EXTRAHIERE:
-                        1. meta: Los-Nummer, Revier, Datum der Aufnahme.
-                        2. polter: GPS Koordinaten (Dezimalgrad!).
-                        3. staemme: Tabelle mit WNr, Länge, Durchmesser, Güte, Fm.
-                        
-                        FORMAT (JSON Dictionary):
+                        JSON STRUKTUR:
                         {
                             "meta": {"los": "String", "revier": "String", "datum": "String"},
                             "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
@@ -231,7 +195,7 @@ with tab1:
                         clean_text = response.text.replace("```json", "").replace("```", "").strip()
                         raw_data = json.loads(clean_text)
                         
-                        # Fix falls Liste statt Dict kommt
+                        # Listen-Fix
                         if isinstance(raw_data, list):
                             data = {"polter": raw_data, "meta": {}, "staemme": []}
                         else:
@@ -245,25 +209,20 @@ with tab1:
     # SPEICHERN
     if st.session_state.analyzed_data:
         data = st.session_state.analyzed_data
-        st.subheader("Vorschau Daten:")
-        st.json(data.get('meta', {}))
-        st.write(f"Polter gefunden: {len(data.get('polter', []))}")
-        st.write(f"Stämme gefunden: {len(data.get('staemme', []))}")
         
-        if st.button("💾 Speichern (inkl. Datei-Upload)"):
-            with st.spinner("Lade Datei zu Drive & speichere Daten..."):
-                # 1. Datei hochladen
-                # Wir müssen den Pointer der Datei zurücksetzen, da er evtl schon gelesen wurde
-                uploaded_file.seek(0)
-                file_link = upload_file_to_drive(uploaded_file, uploaded_file.name)
-                
-                # 2. Daten speichern
-                if save_to_sheets(data, file_link):
-                    st.success(f"Erfolgreich gespeichert! Datei-Link: {file_link}")
-                    st.session_state.analyzed_data = None # Reset nach Speichern
-                    st.info("Wechsle jetzt zum Tab 'Bestand'.")
+        # Kleine Vorschau
+        c1, c2 = st.columns(2)
+        c1.metric("Polter gefunden", len(data.get('polter', [])))
+        c2.metric("Stämme gefunden", len(data.get('staemme', [])))
+        
+        if st.button("💾 Daten in Tabelle speichern"):
+            with st.spinner("Speichere..."):
+                if save_to_sheets(data):
+                    st.success("Erfolgreich gespeichert!")
+                    st.session_state.analyzed_data = None 
+                    st.info("Daten sind jetzt im Reiter 'Bestand' sichtbar.")
 
-# --- TAB 2: BESTAND (NEUES DESIGN) ---
+# --- TAB 2: BESTAND (EXPANDER ANSICHT) ---
 with tab2:
     if st.button("🔄 Aktualisieren"):
         st.cache_data.clear()
@@ -273,8 +232,8 @@ with tab2:
     if df_polter.empty:
         st.info("Noch keine Daten vorhanden.")
     else:
-        # --- KOPFZEILE: KARTE ---
-        st.subheader("🗺️ Gesamtübersicht")
+        # KARTE OBEN
+        st.subheader("🗺️ Gesamtkarte")
         valid_pts = []
         for _, row in df_polter.iterrows():
             try:
@@ -291,45 +250,38 @@ with tab2:
                 folium.Marker([pt['lat'], pt['lon']], popup=pt['info']).add_to(m)
             st_folium(m, width="100%", height=300)
 
-        # --- HAUPTTEIL: DIE "BUTTONS" (EXPANDER) ---
+        # BUTTON-ANSICHT (EXPANDER)
         st.divider()
-        st.subheader("📂 Akten nach Revier & Datum")
+        st.subheader("📂 Akten")
         
-        # Wir gruppieren die Daten: Ein "Block" pro Revier+Los+Datum
-        # Wir erstellen eine Hilfsspalte für die Gruppierung
+        # Prüfen ob Spalten da sind
         if 'Los_Nr' in df_polter.columns and 'Revier' in df_polter.columns:
+            # Sortieren damit neueste oben sind (wenn Datum sauber, sonst einfach so)
             groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
             
-            # Wir iterieren durch die Gruppen (Neueste zuerst wäre gut, hier standard sortiert)
             for (revier, los, datum), group in groups:
-                
-                # Berechnung der Summen für die Beschriftung des Buttons
+                # Summen berechnen
                 total_fm = group['Menge_Fm'].apply(clean_number).sum()
-                file_link = group['Original_Datei'].iloc[0] if 'Original_Datei' in group.columns else "#"
                 
-                # DER BUTTON (EXPANDER)
-                expander_title = f"🌲 Revier: {revier} | Los: {los} | Datum: {datum} | 📦 {total_fm:.2f} Fm"
+                # Der "Button"
+                title = f"🌲 Revier: {revier} | Los: {los} | 📅 {datum} | Menge: {total_fm:.2f} Fm"
                 
-                with st.expander(expander_title):
-                    col1, col2 = st.columns([2, 1])
+                with st.expander(title):
+                    c1, c2 = st.columns([1, 1])
                     
-                    with col1:
-                        st.markdown(f"**Gesamtmenge:** {total_fm:.2f} Festmeter")
-                        st.markdown(f"**Anzahl Polter:** {len(group)}")
-                        st.markdown(f"🔗 [Original-Datei öffnen]({file_link})")
-                        
-                        st.write("Polter-Details:")
+                    with c1:
+                        st.markdown("**Polter-Liste:**")
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
-                    
-                    with col2:
-                        # Einzelstämme dazu finden
-                        if not df_staemme.empty:
+                        
+                    with c2:
+                        # Passende Stämme suchen
+                        if not df_staemme.empty and 'Los_Nr' in df_staemme.columns:
                             stamm_match = df_staemme[
                                 (df_staemme['Los_Nr'].astype(str) == str(los)) & 
                                 (df_staemme['Revier'].astype(str) == str(revier))
                             ]
                             if not stamm_match.empty:
-                                st.write(f"🪵 {len(stamm_match)} Einzelstämme:")
+                                st.markdown(f"**Einzelstämme ({len(stamm_match)}):**")
                                 st.dataframe(stamm_match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm']], hide_index=True)
                             else:
-                                st.info("Keine Einzelstämme erfasst.")
+                                st.write("Keine Einzelstämme zu diesem Los.")
