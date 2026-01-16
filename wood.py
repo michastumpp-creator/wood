@@ -233,14 +233,12 @@ with tab1:
                         Suche "Gesamtmenge" (Fm) und "Stämme gezählt".
                         
                         2. EINZELSTÄMME:
-                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Sie ist ZWEISPALTIG. Lese alles.
+                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Sie ist oft ZWEISPALTIG. Lese alles.
                         Spalten: "WNr", "Lä", "DoR", "FmoR".
-                        
+                        Festmeter, also fmor wird mit drei nachkommastellen angegeben. , ist die dezimalstelle
                         3. POLTER & GPS:
                         Suche Polter-Listen mit GPS. 
-                        WICHTIG: Wandle die Koordinaten in Dezimalgrad um (z.B. 48.1234). 
-                        Das JSON muss direkt die fertigen Zahlen (Floats) enthalten!
-                        Keine Strings, keine DMS-Zeichen. Rechne es selbst um.
+
                         
                         --- JSON STRUKTUR ---
                         {
