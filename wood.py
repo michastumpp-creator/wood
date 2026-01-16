@@ -22,7 +22,7 @@ if 'last_upload' not in st.session_state:
 
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
-    """Reinigt normale Zahlen und Mengen."""
+    """Reinigt normale Zahlen."""
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
@@ -41,20 +41,17 @@ def clean_number(value, is_volume=False):
         if 0.5 < (val / 10) < 20: return val / 10
     return val
 
-# --- HELFER: GPS MATHE-GENIE ---
+# --- HELFER: GPS MATHE-GENIE (DMS -> DEZIMAL) ---
 def parse_dms_to_decimal(val):
     """
-    Wandelt "48°17'06,71" (DMS) korrekt in 48.285... (Dezimal) um.
-    Versteht auch LaTeX-Müll aus dem PDF.
+    Wandelt "48°17'06,71" korrekt um.
     """
     if isinstance(val, (int, float)):
         return float(val)
 
     val_str = str(val).strip()
     
-    # 1. Versuch: Regex für Grad, Minuten, Sekunden
-    # Sucht nach 3 Zahlengruppen. Ignoriert den Müll ($ \circ ' etc) dazwischen.
-    # Beispiel: 48^{\circ}17^{\prime}06,71
+    # Regex für Grad, Minuten, Sekunden
     matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
     
     if matches:
@@ -62,54 +59,72 @@ def parse_dms_to_decimal(val):
             d = float(matches[0][0])
             m = float(matches[0][1])
             s = float(matches[0][2].replace(',', '.'))
-            
-            # Die Formel: D + M/60 + S/3600
-            decimal = d + (m / 60.0) + (s / 3600.0)
-            return decimal
+            return d + (m / 60.0) + (s / 3600.0)
         except:
             pass
-
-    # 2. Versuch: Es ist schon eine Dezimalzahl, aber vielleicht als String "48,123"
+            
+    # Fallback: Versuche es als normale Zahl zu lesen
     return clean_number(val)
 
 def fix_coordinates(lat, lon):
     """
-    Kombiniert DMS-Umrechnung und Bereichs-Check (Deutschland).
+    Zwingt Koordinaten in den deutschen Raum (Anti-Mongolei-Funktion).
     """
-    # Schritt 1: Umrechnen (falls String/DMS)
+    # 1. Erstmal sauber parsen (auch DMS)
     l1 = parse_dms_to_decimal(lat)
     l2 = parse_dms_to_decimal(lon)
 
-    # Schritt 2: Skalieren (falls Komma verrutscht z.B. 48285197 -> 48.28)
-    def force_range(v):
-        if v == 0: return 0.0
-        # Solange > 180 (Erde zu Ende), teilen wir durch 10
+    if l1 == 0 and l2 == 0: return 0.0, 0.0
+
+    # 2. Skalieren (Millionen-Zahlen runterbrechen)
+    # Solange eine Zahl > 180 ist, ist sie keine Koordinate -> Teilen!
+    def scale_down(v):
+        if v == 0: return 0
         while v > 180:
             v /= 10.0
         return v
-
-    l1 = force_range(l1)
-    l2 = force_range(l2)
     
-    if l1 == 0 and l2 == 0: return 0.0, 0.0
+    l1 = scale_down(l1)
+    l2 = scale_down(l2)
 
-    # Schritt 3: Tauschen (Lat ist in DE immer ~48-54, Lon ~6-15)
-    # Check: Welcher Wert passt in welches Fenster?
-    final_lat, final_lon = 0.0, 0.0
+    # 3. ZUORDNUNG (Wer ist Latitude, wer Longitude?)
+    # Deutschland:
+    # Latitude (Breite/Hochwert)  ~ 47.0 bis 55.0
+    # Longitude (Länge/Rechtswert) ~ 6.0 bis 15.0
     
-    # Ist l1 der Breitengrad (40-60)?
-    if 40 < l1 < 60:
-        final_lat = l1
-        final_lon = l2
-    # Oder ist l2 der Breitengrad?
-    elif 40 < l2 < 60:
-        final_lat = l2
-        final_lon = l1
+    final_lat = 0.0
+    final_lon = 0.0
+    
+    # Check l1
+    is_l1_lat = (47 <= l1 <= 55)
+    is_l1_lon = (5 <= l1 <= 15)
+    
+    # Check l2
+    is_l2_lat = (47 <= l2 <= 55)
+    is_l2_lon = (5 <= l2 <= 15)
+    
+    # Logik-Puzzle:
+    if is_l1_lat and is_l2_lon:
+        final_lat, final_lon = l1, l2
+    elif is_l2_lat and is_l1_lon:
+        final_lat, final_lon = l2, l1 # Tausch
     else:
-        # Notlösung: Der größere Wert ist Lat
-        if l1 > l2: return l1, l2
-        else: return l2, l1
+        # Notfall-Plan (Mongolei-Fix):
+        # Wenn eine Zahl ~48 ist und die andere ~92 (Mongolei),
+        # dann ist die 92 wahrscheinlich eine falsch gelesene 9.2!
         
+        # Wir suchen den Wert, der nahe 48 ist -> Das ist Lat
+        if abs(l1 - 48) < abs(l2 - 48):
+            final_lat = l1
+            final_lon = l2
+        else:
+            final_lat = l2
+            final_lon = l1
+            
+        # Wenn Longitude immer noch > 15 (z.B. 92.0), teilen wir sie weiter
+        while final_lon > 15.0:
+            final_lon /= 10.0
+            
     return final_lat, final_lon
 
 # --- GOOGLE SHEETS VERBINDUNG ---
@@ -279,7 +294,7 @@ with tab1:
                         
                         --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
-                        WICHTIG: Die Tabelle ist ZWEISPALTIG. Lese beide Spalten!
+                        WICHTIG: Die Tabelle ist oft ZWEISPALTIG. Lese beide Spalten!
                         Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
                         
                         --- AUFGABE 3: POLTER & GPS ---
