@@ -4,5 +4,5 @@ pandas
 folium
 streamlit-folium
 Pillow
-google-api-python-client
+gspread
 google-auth
