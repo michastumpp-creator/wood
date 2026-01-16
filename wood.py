@@ -21,20 +21,20 @@ if 'analyzed_data' not in st.session_state:
 if 'last_upload' not in st.session_state:
     st.session_state.last_upload = None
 
-# --- HELFER: NUR TYPE-CASTING (KEINE LOGIK!) ---
+# --- HELFER: INPUT VERSTEHEN (Für Berechnungen im RAM) ---
 def to_float(val):
     """
-    Versucht nur, den Wert in eine Zahl zu verwandeln, damit Python rechnen kann.
-    Ändert den Wert NICHT (kein Teilen durch 100 etc.).
+    Versucht, einen Wert für Python-Berechnungen (Summen) lesbar zu machen.
+    Ändert aber NICHTS am Wert selbst (kein Teilen durch 100).
     """
     if val is None: return 0.0
     if isinstance(val, (int, float)): return float(val)
     if isinstance(val, str):
-        # Nur Komma zu Punkt, damit Python nicht abstürzt
         try:
+            # Komma zu Punkt für Python-Interna
             return float(val.replace(',', '.'))
         except:
-            return 0.0 # Wenn es Text ist (z.B. "48°..."), wird es 0
+            return 0.0
     return 0.0
 
 # --- HELFER: PDF MARKIEREN ---
@@ -43,10 +43,9 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl):
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     images = []
     
-    # Suchbegriffe vorbereiten
     search_terms = []
+    # Wir suchen nach der Zahl so wie sie ist, und einmal mit Komma/Punkt getauscht
     if text_summe > 0:
-        # Suche nach Zahl als String
         val_str = str(text_summe)
         search_terms.append({"val": val_str, "color": (1, 1, 0)}) 
         search_terms.append({"val": val_str.replace('.', ','), "color": (1, 1, 0)}) 
@@ -84,7 +83,7 @@ def get_spreadsheet():
         st.error(f"Fehler beim Öffnen der Tabelle: {e}")
         return None
 
-# --- DATEN SPEICHERN (ROH) ---
+# --- DATEN SPEICHERN (PUNKT ERZWINGEN) ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
@@ -97,9 +96,13 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    # Damit Google Sheets Zahlen erkennt (Deutsch = Komma)
+    # FORMATIERUNG: ALLES MIT PUNKT (.)
     def fmt(val): 
-        return str(val).replace('.', ',')
+        if val is None: return ""
+        # 1. In String wandeln
+        s = str(val)
+        # 2. Komma durch Punkt ersetzen
+        return s.replace(',', '.')
 
     # BLATT 1: POLTER
     try: ws_polter = sh.worksheet("Polter_Uebersicht")
@@ -107,19 +110,21 @@ def save_to_sheets(data):
 
     polter_rows = []
     for p in data.get('polter', []):
-        # Wir nehmen die Werte ROH aus dem JSON
-        # Wir formatieren sie nur mit Komma für Google Sheets, ändern aber den Wert nicht
         lat = p.get('lat', 0)
         lon = p.get('lon', 0)
         
-        # Link bauen (braucht Punkt)
-        link = f"http://maps.google.com/?q={lat},{lon}"
+        # Link bauen (braucht Punkt, haben wir ja jetzt)
+        # Wir nehmen die Werte so wie fmt sie ausgibt
+        lat_clean = fmt(lat)
+        lon_clean = fmt(lon)
+        
+        link = f"http://maps.google.com/?q={lat_clean},{lon_clean}"
         
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
             fmt(p.get('fm')), 
-            fmt(lat), 
-            fmt(lon), 
+            lat_clean, 
+            lon_clean, 
             link
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
@@ -178,8 +183,7 @@ def load_data_frames():
     try:
         data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
         df_polter = pd.DataFrame(data_p)
-        # Wir versuchen Strings in Zahlen zu wandeln ("1,5" -> 1.5), damit Summen gehen
-        # Aber wir ändern keine Werte (kein Teilen durch 100)
+        # Wir wandeln alles in Floats für die Anzeige/Karte
         numeric_cols = ['Menge_Fm', 'Lat', 'Lon']
         for c in numeric_cols:
             if c in df_polter.columns: df_polter[c] = df_polter[c].apply(to_float)
@@ -223,22 +227,25 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
-                with st.spinner("KI analysiert (Ohne Nachbearbeitung)..."):
+                with st.spinner("Analyse läuft..."):
                     try:
                         # --- PROMPT ---
                         prompt = """
-                        Du bist ein KI-Assistent. Extrahiere die Daten exakt.
+                        Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
                         1. METADATEN:
                         Suche "Gesamtmenge" (Fm) und "Stämme gezählt".
                         
                         2. EINZELSTÄMME:
-                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Sie ist oft ZWEISPALTIG. Lese alles.
+                        Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". ZWEISPALTIG (Links & Rechts).
                         Spalten: "WNr", "Lä", "DoR", "FmoR".
-                        Festmeter, also fmor wird mit drei nachkommastellen angegeben. , ist die dezimalstelle
+                        
                         3. POLTER & GPS:
-                        Suche Polter-Listen mit GPS. 
-
+                        Suche Polter-Listen mit GPS.
+                        
+                        WICHTIGSTE REGEL: 
+                        Speichere Zahlen so, wie sie mathematisch korrekt sind (1,37 Fm -> 1.37).
+                        Nutze PUNKT als Dezimaltrenner im JSON.
                         
                         --- JSON STRUKTUR ---
                         {
@@ -282,7 +289,7 @@ with tab1:
                     for idx, img in enumerate(marked_images):
                         with cols[idx]:
                             st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
-                except: st.warning("PDF Markierung fehlgeschlagen.")
+                except: pass
 
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in data.get('staemme', [])])
         stamm_count = len(data.get('staemme', []))
@@ -299,8 +306,8 @@ with tab1:
             
         with c2:
             st.markdown("**Stückzahl-Check**")
-            st.write(f"Soll: {doc_count} Stk")
-            st.write(f"Ist: {stamm_count} Stk")
+            st.write(f"Soll: {doc_count}")
+            st.write(f"Ist: {stamm_count}")
             if doc_count > 0:
                 if doc_count == stamm_count: st.success("✅ OK")
                 else: st.error(f"⚠️ Diff: {doc_count - stamm_count}")
@@ -358,15 +365,14 @@ with tab2:
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                         valid_pts = []
                         for _, row in group.iterrows():
-                            # Nur wenn es wirklich Zahlen sind
-                            try:
-                                lat, lon = float(row['Lat']), float(row['Lon'])
-                                if lat != 0: 
-                                    valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
-                            except: pass
+                            # Wenn Lat/Lon gültige Zahlen sind, zeige sie
+                            if isinstance(row['Lat'], (int, float)) and row['Lat'] != 0:
+                                valid_pts.append({"lat": row['Lat'], "lon": row['Lon'], "info": f"P{row['Polter_Nr']}"})
+                        
                         if valid_pts:
                             map_df = pd.DataFrame(valid_pts)
                             map_key = f"map_{revier}_{los}_{datum}"
+                            # Automatischer Zoom auf die Punkte
                             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=13)
                             for _, pt in map_df.iterrows():
                                 folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
