@@ -21,26 +21,25 @@ if 'analyzed_data' not in st.session_state:
     st.session_state.analyzed_data = None
 if 'last_upload' not in st.session_state:
     st.session_state.last_upload = None
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
 
 # --- HELFER: INPUT VERSTEHEN ---
 def to_float(val):
     if val is None: return 0.0
     if isinstance(val, (int, float)): return float(val)
     if isinstance(val, str):
-        try:
-            return float(val.replace(',', '.'))
-        except:
-            return 0.0
+        try: return float(val.replace(',', '.'))
+        except: return 0.0
     return 0.0
 
-# --- HELFER: KOORDINATEN FÜR KARTE ---
+# --- HELFER: GPS ---
 def parse_gps_for_map(val):
     val_str = str(val).strip()
     try:
         f = float(val_str.replace(',', '.'))
         if 47 < f < 55 or 5 < f < 15: return f
     except: pass
-
     matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
     if matches:
         try:
@@ -86,7 +85,7 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
         images.append(Image.open(io.BytesIO(img_data)))
     return images
 
-# --- GOOGLE SHEETS VERBINDUNG ---
+# --- GOOGLE SHEETS ---
 def get_spreadsheet():
     if "gcp_service_account" not in st.secrets:
         st.error("Secrets fehlen!")
@@ -99,10 +98,9 @@ def get_spreadsheet():
         client = gspread.authorize(creds)
         return client.open("Forst_Datenbank")
     except Exception as e:
-        st.error(f"Fehler beim Öffnen der Tabelle: {e}")
+        st.error(f"Fehler: {e}")
         return None
 
-# --- DATEN SPEICHERN ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
@@ -113,23 +111,22 @@ def save_to_sheets(data):
     meta = data.get('meta', {})
     los = str(meta.get('los', 'Unbekannt'))
     revier = str(meta.get('revier', 'Unbekannt'))
-    waldort = str(meta.get('waldort', '')) # Neuer Wert
+    ort = str(meta.get('revier_ort', '')) # Neuer Wert: Ort
+    zert = str(meta.get('zertifikat', '')) # Neuer Wert: Zertifikat
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    def fmt(val): 
-        if val is None: return ""
-        return str(val).replace(',', '.')
+    def fmt(val): return str(val).replace(',', '.') if val is not None else ""
 
     # 1. POLTER
     try: 
         ws_polter = sh.worksheet("Polter_Uebersicht")
-        # Header checken/erweitern für Waldort
+        # Header prüfen und ggf. erweitern
         headers = ws_polter.row_values(1)
-        if "Waldort" not in headers:
-            ws_polter.update_cell(1, len(headers)+1, "Waldort")
+        if "Ort" not in headers: ws_polter.update_cell(1, len(headers)+1, "Ort")
+        if "Zertifikat" not in headers: ws_polter.update_cell(1, len(headers)+2, "Zertifikat")
     except: 
-        ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=11)
-        ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Waldort"])
+        ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=15)
+        ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat"])
 
     polter_rows = []
     for p in data.get('polter', []):
@@ -141,11 +138,11 @@ def save_to_sheets(data):
             link = f"http://maps.google.com/?q={l_lat},{l_lon}"
         except: link = ""
         
-        # Reihenfolge muss zum Header passen. Waldort ist jetzt ganz hinten oder Spalte 10/11.
-        # Wir hängen Waldort einfach hinten dran, wenn die Tabelle Standard ist.
+        # Achtung: Reihenfolge muss stimmen. Wir hängen Neue Felder hinten an.
+        # Im Idealfall nutzt man DictWriter, aber für gspread hier quick & dirty append
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
-            fmt(p.get('fm')), lat_text, lon_text, link, waldort
+            fmt(p.get('fm')), lat_text, lon_text, link, ort, zert
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
@@ -167,7 +164,6 @@ def save_to_sheets(data):
 
     return True
 
-# --- DATEN LÖSCHEN ---
 def delete_entry(los, revier, datum_aufnahme):
     sh = get_spreadsheet()
     if not sh: return False
@@ -192,7 +188,6 @@ def delete_entry(los, revier, datum_aufnahme):
         return True
     except: return False
 
-# --- DATEN LADEN ---
 def load_data_frames():
     sh = get_spreadsheet()
     if not sh: return pd.DataFrame(), pd.DataFrame()
@@ -202,7 +197,6 @@ def load_data_frames():
         if not df_polter.empty and 'Menge_Fm' in df_polter.columns:
             df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(to_float)
     except: df_polter = pd.DataFrame()
-
     try:
         data_s = sh.worksheet("Einzelstaemme").get_all_records()
         df_staemme = pd.DataFrame(data_s)
@@ -226,6 +220,7 @@ with tab1:
     if uploaded_file:
         if st.session_state.last_upload != uploaded_file.name:
             st.session_state.analyzed_data = None
+            st.session_state.messages = [] # Chat Reset
             st.session_state.last_upload = uploaded_file.name
 
         content = None
@@ -242,24 +237,25 @@ with tab1:
                 with st.spinner("Analyse läuft..."):
                     try:
                         prompt = """
-                        Du bist ein KI-Assistent für deutsche Forstwirtschaft.
+                        Du bist ein KI-Assistent für Forstwirtschaft. Analysiere das Dokument exakt.
                         
                         1. METADATEN:
-                        Suche "Gesamtmenge" (Fm), "Stämme gezählt".
-                        Suche auch den "Waldort" oder "Distrikt" (z.B. "Scheiterwald" oder "Kalkofen").
+                        - "Gesamtmenge" (Fm), "Stämme gezählt".
+                        - "Revier Ort": Suche die Adresse des Reviers. Extrahiere NUR den Ortsnamen neben der PLZ (z.B. bei "72513 Inneringen" -> "Inneringen"). Nicht das Waldgebiet!
+                        - "Zertifikat": Suche nach "FSC", "PEFC" oder "Zertifiziert". Wenn gefunden, gib den Namen zurück, sonst leer.
                         
                         2. EINZELSTÄMME:
                         Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Spalten: WNr, Lä, DoR, FmoR.
-                        Wenn Spalte "K" vorhanden oder "K" bei Nummer steht -> klammer: true.
+                        Wenn "K" Spalte/Markierung -> klammer: true.
                         
                         3. POLTER & GPS:
-                        Suche Polter-Listen mit GPS. Extrahiere den GPS-String exakt (z.B. "48°17'06,71").
+                        Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
                         
                         --- JSON STRUKTUR ---
                         {
                             "meta": {
-                                "los": "String", "revier": "String", "waldort": "String", "datum": "String", 
-                                "dokument_summe": Float, "dokument_anzahl_staemme": Int
+                                "los": "String", "revier": "String", "revier_ort": "String", "zertifikat": "String",
+                                "datum": "String", "dokument_summe": Float, "dokument_anzahl_staemme": Int
                             },
                             "polter": [{"nr": Int, "fm": Float, "lat": "String", "lon": "String"}],
                             "staemme": [{"wnr": "String", "klammer": Boolean, "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
@@ -273,24 +269,76 @@ with tab1:
                         clean = response.text.replace("```json", "").replace("```", "").strip()
                         data = json.loads(clean)
                         st.session_state.analyzed_data = data
+                        
+                        # --- INITIALER CHECK DURCH KI ---
+                        # Wir lassen die KI gleich einen Kommentar generieren
+                        check_prompt = f"""
+                        Prüfe diese extrahierten Daten auf Plausibilität.
+                        Daten: {json.dumps(data)}
+                        Rechne die Summe der Stämme nach. Stimmt sie mit 'dokument_summe' überein?
+                        Fehlen Polter-Koordinaten?
+                        Antworte kurz und direkt an den Förster. Wenn alles passt, sag "Alles sieht gut aus.".
+                        """
+                        check_resp = client.models.generate_content(model="gemini-3-flash-preview", contents=check_prompt)
+                        st.session_state.messages.append({"role": "assistant", "content": check_resp.text})
+                        
                         st.rerun()
                     except Exception as e: st.error(f"Fehler: {e}")
 
     if st.session_state.analyzed_data:
         data = st.session_state.analyzed_data
         
+        # --- CHAT UI ---
         st.divider()
-        st.subheader("🕵️ Prüfung")
+        st.subheader("💬 KI-Assistent")
+        
+        # Chat History anzeigen
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+        
+        # User Input
+        if user_input := st.chat_input("Frage etwas zur Liste (z.B. 'Welche Baumarten?')"):
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.write(user_input)
+            
+            # KI Antwort generieren
+            with st.spinner("Überlege..."):
+                chat_prompt = f"""
+                Du bist ein Forst-Experte. Der Nutzer fragt dich etwas zu dieser Holzliste:
+                {json.dumps(data)}
+                
+                Frage: {user_input}
+                Antworte auf Deutsch, kurz und präzise.
+                """
+                response = client.models.generate_content(model="gemini-3-flash-preview", contents=chat_prompt)
+                st.session_state.messages.append({"role": "assistant", "content": response.text})
+                st.rerun()
+        
+        # --- DATA DISPLAY ---
+        st.divider()
+        
+        # K-Stamm Logik
+        all_stems = data.get('staemme', [])
+        valid_stems = [s for s in all_stems if not s.get('klammer', False)]
         
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
+        stamm_sum = sum([to_float(s.get('fm', 0)) for s in all_stems]) # Volumen inkl. K
         
-        all_stems = data.get('staemme', [])
-        valid_stems = [s for s in all_stems if not s.get('klammer', False)]
-        stamm_sum = sum([to_float(s.get('fm', 0)) for s in all_stems]) # Summe inkl. K
+        meta = data.get('meta', {})
+        zertifikat = meta.get('zertifikat', '')
         
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Festmeter (Soll/Ist)", f"{doc_sum} / {stamm_sum:.2f}", delta=round(stamm_sum-doc_sum, 2))
+        c2.metric("Stückzahl (Ohne K)", f"{doc_count} / {len(valid_stems)}", delta=len(valid_stems)-doc_count)
+        
+        z_label = f"Polter ({zertifikat})" if zertifikat else "Polter"
+        c3.metric(z_label, len(data.get('polter', [])))
+
         if uploaded_file.type == "application/pdf":
-            with st.expander("📄 PDF-Check (Visuell)", expanded=True):
+            with st.expander("📄 PDF-Check (Visuell)"):
                 try:
                     marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count, data.get('polter', []))
                     cols = st.columns(len(marked_images))
@@ -298,10 +346,8 @@ with tab1:
                         with cols[idx]: st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
                 except: pass
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Festmeter (Soll/Ist)", f"{doc_sum} / {stamm_sum:.2f}", delta=round(stamm_sum-doc_sum, 2))
-        c2.metric("Stückzahl (Ohne K)", f"{doc_count} / {len(valid_stems)}", delta=len(valid_stems)-doc_count)
-        c3.metric("Polter", len(data.get('polter', [])))
+        with st.expander("Details Tabelle"):
+            st.dataframe(pd.DataFrame(all_stems))
 
         if st.button("💾 Speichern"):
             with st.spinner("Speichere..."):
@@ -320,38 +366,37 @@ with tab2:
     if df_polter.empty:
         st.info("Keine Daten.")
     else:
-        # --- COCKPIT: KARTE & STATISTIK ---
-        st.subheader("📊 Gesamtübersicht")
-        col_stats, col_map = st.columns([1, 2])
+        # --- KOMPAKTES COCKPIT ---
+        st.subheader("📊 Übersicht")
+        c_stats, c_map = st.columns([1, 1]) # 50/50 Aufteilung
         
-        with col_stats:
+        with c_stats:
             if not df_staemme.empty:
-                st.markdown("**Festmeter nach Baumart**")
-                # Summiere Volumen pro Holzart (inkl. K, wie gewünscht)
+                # Stats gruppieren
                 stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
-                st.dataframe(stats, height=250)
-                st.caption(f"Gesamt: {stats.sum():.2f} Fm")
-            else:
-                st.info("Keine Stammdaten.")
+                st.dataframe(stats, height=200, use_container_width=True)
+                st.caption(f"**Gesamt: {stats.sum():.2f} Fm**")
+            else: st.info("Leer")
 
-        with col_map:
-            st.markdown("**🗺️ Alle Lagerorte**")
+        with c_map:
+            # Alle Punkte sammeln
             all_pts = []
             for _, row in df_polter.iterrows():
                 lat = parse_gps_for_map(row.get('Lat', ''))
                 lon = parse_gps_for_map(row.get('Lon', ''))
                 if lat > 0:
-                    info = f"Los {row['Los_Nr']} | P{row['Polter_Nr']}"
+                    info = f"{row.get('Ort','')} | Los {row['Los_Nr']}"
                     all_pts.append({"lat": lat, "lon": lon, "info": info})
             
             if all_pts:
                 map_df = pd.DataFrame(all_pts)
-                m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=10)
+                # Kleine Karte (height=200)
+                m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=9)
                 for _, pt in map_df.iterrows():
                     folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="blue", icon="tree", prefix='fa')).add_to(m)
-                st_folium(m, width="100%", height=300, key="global_map")
+                st_folium(m, width="100%", height=200, key="global_map_compact")
             else:
-                st.warning("Keine gültigen GPS-Daten gefunden.")
+                st.caption("Keine GPS Daten.")
 
         st.divider()
         st.subheader("📂 Akten")
@@ -360,64 +405,66 @@ with tab2:
             groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
             
             for (revier, los, datum), group in groups:
-                # Metadaten holen
                 polter_sum = group['Menge_Fm'].sum()
-                waldort = group['Waldort'].iloc[0] if 'Waldort' in group.columns else ""
-                if str(waldort) == "nan": waldort = ""
                 
-                ort_label = f" ({waldort})" if waldort else ""
+                # Ort aus der Tabelle holen (Spalte 'Ort')
+                ort_val = group['Ort'].iloc[0] if 'Ort' in group.columns else ""
+                ort_label = f" ({ort_val})" if ort_val and str(ort_val) != "nan" else ""
                 
-                # Stämme für dieses Los holen
-                match = pd.DataFrame()
+                zert_val = group['Zertifikat'].iloc[0] if 'Zertifikat' in group.columns else ""
+                zert_label = f" [{zert_val}]" if zert_val and str(zert_val) != "nan" else ""
+
+                # Stämme Info
                 stem_summary = ""
+                stamm_anzahl = 0
+                match = pd.DataFrame()
                 
                 if not df_staemme.empty:
                     match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
                     if not match.empty:
-                        # Baumarten zählen (OHNE K für die Anzeige im Titel)
-                        # Wir filtern hier 'K' aus der WNr raus, falls wir es so gespeichert haben "(K)"
-                        # Oder wir filtern einfach alles raus was "(K)" im Namen hat
-                        non_k_match = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
+                        # K-Stämme filtern für Anzahl
+                        non_k = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
+                        stamm_anzahl = len(non_k)
                         
-                        counts = non_k_match['Holzart'].value_counts()
-                        # Format "Bu: 12, Fi: 5"
-                        summary_parts = [f"{art}: {count}" for art, count in counts.items()]
-                        stem_summary = " | 🌳 " + ", ".join(summary_parts)
+                        # Kurz-Statistik für Titel
+                        counts = non_k['Holzart'].value_counts().head(3) # Nur Top 3
+                        summary_parts = [f"{art}: {c}" for art, c in counts.items()]
+                        stem_summary = " | " + ", ".join(summary_parts)
 
-                title = f"🌲 {revier}{ort_label} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm {stem_summary}"
+                title = f"🌲 {revier}{ort_label}{zert_label} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm | 🪵 {stamm_anzahl} Stk{stem_summary}"
                 
                 with st.expander(title):
                     col_del, col_info = st.columns([1, 4])
                     with col_del:
-                        if st.button(f"🗑️ Liste Löschen", key=f"del_{revier}_{los}_{datum}"):
-                            with st.spinner("Lösche..."):
+                        if st.button(f"🗑️", key=f"del_{revier}_{los}_{datum}", help="Liste löschen"):
+                            with st.spinner("..."):
                                 if delete_entry(los, revier, datum):
-                                    st.success("Gelöscht!")
+                                    st.success("Weg!")
                                     st.cache_data.clear()
                                     st.rerun()
 
                     c1, c2 = st.columns([1, 1])
                     with c1:
-                        st.markdown("**Polter & GPS**")
+                        st.markdown("**Polter**")
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                         
-                        # Mini-Karte
-                        valid_pts = []
+                        # Mini-Map für Expander
+                        v_pts = []
                         for _, row in group.iterrows():
                             lat = parse_gps_for_map(row.get('Lat', ''))
                             lon = parse_gps_for_map(row.get('Lon', ''))
-                            if lat > 0: valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
+                            if lat > 0: v_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
                         
-                        if valid_pts:
-                            map_df = pd.DataFrame(valid_pts)
-                            m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=13)
-                            for _, pt in map_df.iterrows():
-                                folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
-                            st_folium(m, width="100%", height=250, key=f"map_{revier}_{los}_{datum}")
+                        if v_pts:
+                            m_df = pd.DataFrame(v_pts)
+                            m = folium.Map(location=[m_df.lat.mean(), m_df.lon.mean()], zoom_start=13)
+                            for _, pt in m_df.iterrows():
+                                folium.Marker([pt['lat'], pt['lon']], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
+                            st_folium(m, width="100%", height=150, key=f"map_{los}")
 
                     with c2:
                         if not match.empty:
-                            st.markdown(f"**Einzelstämme ({len(match)} inkl. K):**")
+                            st.markdown(f"**Einzelstämme**")
                             st.dataframe(match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm']], hide_index=True)
                         else:
-                            st.write("Keine Einzelstämme.")
+                            st.caption("Keine Stämme.")
