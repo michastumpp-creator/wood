@@ -41,43 +41,22 @@ def clean_number(value, is_volume=False):
         return 0.0
 
     # PLAUSIBILITÄTS-CHECK FÜR EINZELSTÄMME
-    # Ein einzelner Baumstamm in Deutschland hat selten > 10 Festmeter.
-    # Wenn wir 137.0 erhalten, war es wahrscheinlich 1.37
     if is_volume and val > 15.0: 
-        # Versuch: Teile durch 100 (z.B. 137 -> 1.37)
-        if 0.5 < (val / 100) < 15:
-            return val / 100
-        # Versuch: Teile durch 10 (z.B. 13.7 -> 1.37 - eher selten, aber möglich)
-        if 0.5 < (val / 10) < 15:
-            return val / 10
+        if 0.5 < (val / 100) < 15: return val / 100
+        if 0.5 < (val / 10) < 15: return val / 10
             
     return val
 
 # --- HELFER: KOORDINATEN RETTEN ---
 def fix_coordinates(lat, lon):
-    """
-    Stellt sicher, dass Lat/Lon in Deutschland liegen.
-    Deutschland ca: Lat 47-55, Lon 5-15
-    """
     l1 = clean_number(lat)
     l2 = clean_number(lon)
-    
-    # Wenn beides 0 ist, abbrechen
     if l1 == 0 and l2 == 0: return 0.0, 0.0
 
-    final_lat = 0.0
-    final_lon = 0.0
-
-    # Logik: Welcher Wert ist welcher?
-    # Latitude (Breite) in DE ist immer größer (ca 48-52) als Longitude (ca 8-12)
     if l1 > l2:
-        final_lat = l1
-        final_lon = l2
+        return l1, l2
     else:
-        final_lat = l2 # Tausch
-        final_lon = l1
-        
-    return final_lat, final_lon
+        return l2, l1 # Tausch
 
 # --- GOOGLE SHEETS VERBINDUNG ---
 def get_spreadsheet():
@@ -118,7 +97,6 @@ def save_to_sheets(data):
     polter_rows = []
     for p in data.get('polter', []):
         fm = clean_number(p.get('fm', 0))
-        # Koordinaten prüfen und tauschen falls nötig
         raw_lat = p.get('lat', 0)
         raw_lon = p.get('lon', 0)
         lat, lon = fix_coordinates(raw_lat, raw_lon)
@@ -142,7 +120,6 @@ def save_to_sheets(data):
         for s in staemme_data:
             l = clean_number(s.get('l', 0))
             d = clean_number(s.get('d', 0))
-            # HIER GREIFT DER ZAHLEN-FIX (is_volume=True)
             fm = clean_number(s.get('fm', 0), is_volume=True)
             
             stamm_rows.append([timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), l, d, s.get('klasse', ''), fm])
@@ -168,7 +145,7 @@ def load_data_frames():
 # --- APP START ---
 st.title("🌲 Forst-Verwaltung")
 
-tab1, tab2 = st.tabs(["📸 Scan & Erfassung", "🗃️ Bestand (Buttons)"])
+tab1, tab2 = st.tabs(["📸 Scan & Erfassung", "🗃️ Bestand"])
 
 # --- TAB 1: SCANNER ---
 with tab1:
@@ -194,19 +171,27 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button("🚀 Analysieren"):
-                with st.spinner("Gemini arbeitet (Zahlen & GPS Fix)..."):
+                with st.spinner("Gemini sucht Stämme..."):
                     try:
+                        # --- VERBESSERTER PROMPT ---
                         prompt = """
-                        Analysiere diese Holzliste für den deutschen Forst.
+                        Analysiere diese Forst-Holzliste.
                         
-                        WICHTIGSTE REGELN:
-                        1. ZAHLEN: "1,370" bedeutet "EINS KOMMA DREI SIEBEN" (1.37). Das ist NICHT Tausend! Ignoriere Tausendertrennzeichen. Ausgabe immer mit Punkt (1.37).
-                        2. KOORDINATEN: Suche Lat (ca 47-54°) und Lon (ca 6-15°). Rechne DMS (Grad,Min,Sek) EXAKT in Dezimalgrad um.
+                        1. SUCHE NACH DER TABELLE "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
+                           Dort stehen die Einzelstämme. Achte auf folgende Spalten-Kürzel:
+                           - "WNr" = Waldnummer
+                           - "Lä" = Länge
+                           - "DoR" = Durchmesser (oder "D")
+                           - "FmoR" = Festmeter (Volumen)
                         
-                        EXTRAHIERE:
-                        - meta: Los, Revier, Datum
-                        - polter: Liste mit GPS
-                        - staemme: Liste mit WNr, Länge, Durchmesser, Güte, Volumen(Fm)
+                        2. REGELN FÜR ZAHLEN:
+                           - "1,370" ist 1.37 (Eins Komma Drei Sieben). Ignoriere Tausenderpunkte!
+                           - Koordinaten (Lat/Lon) in Dezimalgrad umrechnen.
+                        
+                        3. EXTRAHIERE:
+                           - meta: Los, Revier, Datum
+                           - polter: Polter-Nummern & Koordinaten
+                           - staemme: Liste ALLER Einzelstämme
                         
                         JSON STRUKTUR:
                         {
@@ -234,19 +219,22 @@ with tab1:
         
         c1, c2 = st.columns(2)
         c1.metric("Polter", len(data.get('polter', [])))
-        c2.metric("Stämme", len(data.get('staemme', [])))
+        c2.metric("Stämme gefunden", len(data.get('staemme', [])))
         
-        st.write("Vorschau (Erste 5 Stämme):")
-        st.dataframe(pd.DataFrame(data.get('staemme', [])).head(5))
+        if data.get('staemme'):
+            st.write("Vorschau (Erste 5 Stämme):")
+            st.dataframe(pd.DataFrame(data.get('staemme', [])).head(5))
+        else:
+            st.warning("⚠️ Keine Einzelstämme gefunden. Prüfe, ob die Seite 'Zusammenstellung nach Waldnummern' im PDF ist.")
 
-        if st.button("💾 In Google Tabelle speichern"):
+        if st.button("💾 Speichern"):
             with st.spinner("Speichere..."):
                 if save_to_sheets(data):
                     st.success("Gespeichert!")
                     st.session_state.analyzed_data = None
                     st.info("Wechsle jetzt zu 'Bestand'.")
 
-# --- TAB 2: BESTAND (BUTTON DESIGN) ---
+# --- TAB 2: BESTAND ---
 with tab2:
     if st.button("🔄 Aktualisieren"):
         st.cache_data.clear()
@@ -256,12 +244,11 @@ with tab2:
     if df_polter.empty:
         st.info("Keine Daten.")
     else:
-        # KARTE (Oben fixiert)
+        # KARTE
         st.subheader("🗺️ Gesamtkarte")
         valid_pts = []
         for _, row in df_polter.iterrows():
             try:
-                # Koordinaten reparieren beim Laden
                 lat, lon = fix_coordinates(row.get('Lat',0), row.get('Lon',0))
                 if lat != 0:
                     valid_pts.append({"lat": lat, "lon": lon, "info": f"Revier {row['Revier']} | P{row['Polter_Nr']}"})
@@ -269,7 +256,6 @@ with tab2:
             
         if valid_pts:
             map_df = pd.DataFrame(valid_pts)
-            # Mittelpunkt DE falls leer, sonst Daten-Mittelpunkt
             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=11)
             for _, pt in map_df.iterrows():
                 folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
@@ -278,16 +264,12 @@ with tab2:
         st.divider()
         st.subheader("📂 Reviere & Lose")
         
-        # GRUPPIERUNG FÜR BUTTONS
         if 'Los_Nr' in df_polter.columns and 'Revier' in df_polter.columns:
-            # Erstelle eine eindeutige Gruppe
-            # Wir nehmen das Datum aus der Polter-Tabelle
             groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
             
             for (revier, los, datum), group in groups:
                 total_fm = group['Menge_Fm'].apply(clean_number).sum()
                 
-                # DER BUTTON (Expander)
                 label = f"🌲 Revier {revier} | Los {los} | 📅 {datum} | 📦 {total_fm:.2f} Fm"
                 
                 with st.expander(label):
@@ -298,7 +280,6 @@ with tab2:
                         
                     with c2:
                         st.markdown("### 🪵 Einzelstämme")
-                        # Passende Stämme filtern
                         if not df_staemme.empty and 'Los_Nr' in df_staemme.columns:
                             stamm_match = df_staemme[
                                 (df_staemme['Los_Nr'].astype(str) == str(los)) & 
