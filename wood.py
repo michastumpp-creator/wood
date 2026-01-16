@@ -295,7 +295,7 @@ with tab1:
                         --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN" oder ähnlich.
                         WICHTIG: Die Tabelle ist oft ZWEISPALTIG. Lese alle Spalten!
-                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
+                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen. oft gibt es eine zusammenfassung der holzarten oder qualitäten. diese nicht als einzelstämme aufnehmen.
                         
                         --- AUFGABE 3: POLTER & GPS ---
                         Suche Polter-Listen mit GPS. 
