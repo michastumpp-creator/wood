@@ -11,7 +11,7 @@ from PIL import Image
 st.set_page_config(page_title="Forst-Koordinator", page_icon="🌲", layout="centered")
 
 st.title("🌲 Forst-Koordinator")
-st.write("Lade ein Foto der Holzliste hoch. Die App findet den Weg.")
+st.write("Lade ein Foto der Holzliste hoch.")
 
 # --- API KEY AUTOMATISCH LADEN ---
 try:
@@ -32,7 +32,7 @@ if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image, caption="Dein Foto", use_container_width=True)
         
-        with st.spinner('Werte Koordinaten aus (Modell: 1.5 Flash)...'):
+        with st.spinner('Analysiere (Gemini 2.0 Flash Lite)...'):
             
             prompt = """
             Du bist ein Assistent für die Forstwirtschaft.
@@ -55,10 +55,10 @@ if uploaded_file is not None:
             ]
             """
             
-            # HIER WAR DER FEHLER: Wir nehmen jetzt das stabile 1.5 Modell
-            # Das hat 1500 Anfragen pro Tag frei (statt nur 20).
+            # ÄNDERUNG: Wir nehmen die 'Lite' Version aus deiner Liste.
+            # Die ist für hohe Mengen gemacht und sollte funktionieren.
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="models/gemini-2.0-flash-lite",
                 contents=[prompt, image],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -108,11 +108,7 @@ if uploaded_file is not None:
                 st.error("Keine Antwort vom Google Server.")
                 
     except Exception as e:
-        # Falls 1.5-flash auch zickt, fangen wir es ab
-        if "404" in str(e):
-             st.error("Fehler: Modell nicht gefunden. Bitte prüfe den Modellnamen.")
-        else:
-             st.error(f"Ein Fehler ist aufgetreten: {e}")
+        st.error(f"Ein Fehler ist aufgetreten: {e}")
 
 else:
     st.info("Bitte oben ein Foto hochladen.")
