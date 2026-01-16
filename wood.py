@@ -23,21 +23,13 @@ if 'last_upload' not in st.session_state:
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
     """
-    Macht aus ALLEM eine Python-Zahl (Float).
-    Egal ob Input: 1.5 (float), "1,5" (str) oder "1.5" (str).
+    Reinigt Zahlen und repariert "Google Sheets Integer Fehler".
+    Macht aus 137 -> 1.37 (wenn is_volume=True)
     """
-    if value is None:
-        return 0.0
-        
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
-        # Wenn leerer String
-        if not value.strip(): return 0.0
-        
-        # 1. Komma zu Punkt
         clean = value.replace(',', '.')
-        # 2. Alles weg was keine Zahl/Punkt ist
         clean = re.sub(r'[^\d.]', '', clean)
         try:
             val = float(clean)
@@ -46,18 +38,30 @@ def clean_number(value, is_volume=False):
     else:
         return 0.0
 
-    # PLAUSIBILITÄTS-CHECK (Nur für Volumen)
-    # Fängt Fehler ab wie 137 Fm statt 1.37 Fm
-    if is_volume and val > 15.0: 
-        if 0.5 < (val / 100) < 15: return val / 100
-        if 0.5 < (val / 10) < 15: return val / 10
+    # REPARATUR-LOGIK (Nur wenn aktiviert)
+    if is_volume and val > 0:
+        # Fall 1: Zahl ist riesig (z.B. 137 statt 1.37)
+        # Ein Stamm/Polter hat selten > 50 Fm. Wenn wir 908 haben, ist es 9.08
+        if val > 50: 
+            return val / 100.0
             
     return val
 
 # --- HELFER: KOORDINATEN RETTEN ---
 def fix_coordinates(lat, lon):
-    l1 = clean_number(lat)
-    l2 = clean_number(lon)
+    # Hilfsfunktion, um eine einzelne Koordinate zu retten
+    def repair_gps_val(v):
+        v = clean_number(v)
+        if v == 0: return 0.0
+        # Wenn die Zahl riesig ist (z.B. 48285197), teilen wir bis sie passt
+        # Breitengrad DE ist ca 47-55, Längengrad ca 6-15
+        while v > 100:
+            v = v / 10.0
+        return v
+
+    l1 = repair_gps_val(lat)
+    l2 = repair_gps_val(lon)
+    
     if l1 == 0 and l2 == 0: return 0.0, 0.0
 
     # Latitude (Breite DE) ist immer größer (~48) als Longitude (~9)
@@ -82,14 +86,12 @@ def get_spreadsheet():
         st.error(f"Fehler beim Öffnen der Tabelle: {e}")
         return None
 
-# --- DATEN SPEICHERN (DEUTSCHES FORMAT) ---
+# --- DATEN SPEICHERN ---
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
-    # Fallback falls KI Liste statt Dict liefert
     if isinstance(data, list): data = {"polter": data, "meta": {}, "staemme": []}
 
     meta = data.get('meta', {})
@@ -97,7 +99,6 @@ def save_to_sheets(data):
     revier = str(meta.get('revier', 'Unbekannt'))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
 
-    # Helper für Google Sheets: Punkt zu Komma konvertieren
     def to_german(val):
         return str(val).replace('.', ',')
 
@@ -110,14 +111,9 @@ def save_to_sheets(data):
         fm = clean_number(p.get('fm', 0))
         lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
-        
-        # WICHTIG: Wir speichern als String mit KOMMA, damit Google Sheets es kapiert
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
-            to_german(fm), 
-            to_german(lat), 
-            to_german(lon), 
-            link
+            to_german(fm), to_german(lat), to_german(lon), link
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
@@ -132,13 +128,9 @@ def save_to_sheets(data):
             l = clean_number(s.get('l', 0))
             d = clean_number(s.get('d', 0))
             fm = clean_number(s.get('fm', 0), is_volume=True)
-            
             stamm_rows.append([
                 timestamp, los, revier, s.get('wnr', ''), s.get('art', ''), 
-                to_german(l), 
-                to_german(d), 
-                s.get('klasse', ''), 
-                to_german(fm)
+                to_german(l), to_german(d), s.get('klasse', ''), to_german(fm)
             ])
         if stamm_rows: ws_stamm.append_rows(stamm_rows, value_input_option='USER_ENTERED')
 
@@ -148,34 +140,24 @@ def save_to_sheets(data):
 def delete_entry(los, revier, datum_aufnahme):
     sh = get_spreadsheet()
     if not sh: return False
-
     try:
-        # 1. POLTER
         ws_p = sh.worksheet("Polter_Uebersicht")
         data_p = ws_p.get_all_records()
         df_p = pd.DataFrame(data_p)
-        
-        mask_p = (df_p['Los_Nr'].astype(str) == str(los)) & \
-                 (df_p['Revier'].astype(str) == str(revier)) & \
-                 (df_p['Datum_Aufnahme'].astype(str) == str(datum_aufnahme))
-        
+        mask_p = (df_p['Los_Nr'].astype(str) == str(los)) & (df_p['Revier'].astype(str) == str(revier)) & (df_p['Datum_Aufnahme'].astype(str) == str(datum_aufnahme))
         df_p_clean = df_p[~mask_p]
         ws_p.clear()
         ws_p.update([df_p_clean.columns.values.tolist()] + df_p_clean.values.tolist())
 
-        # 2. STÄMME
         try:
             ws_s = sh.worksheet("Einzelstaemme")
             data_s = ws_s.get_all_records()
             df_s = pd.DataFrame(data_s)
-            
-            mask_s = (df_s['Los_Nr'].astype(str) == str(los)) & \
-                     (df_s['Revier'].astype(str) == str(revier))
+            mask_s = (df_s['Los_Nr'].astype(str) == str(los)) & (df_s['Revier'].astype(str) == str(revier))
             df_s_clean = df_s[~mask_s]
             ws_s.clear()
             ws_s.update([df_s_clean.columns.values.tolist()] + df_s_clean.values.tolist())
         except: pass
-
         return True
     except Exception as e:
         st.error(f"Fehler: {e}")
@@ -191,24 +173,38 @@ def load_data_frames():
         data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
         df_polter = pd.DataFrame(data_p)
         
-        # WICHTIG: Wir wandeln die Texte ("1,37") sofort zurück in Zahlen (1.37)
-        numeric_cols = ['Menge_Fm', 'Lat', 'Lon']
-        for col in numeric_cols:
-            if col in df_polter.columns:
-                df_polter[col] = df_polter[col].apply(clean_number)
+        # WICHTIG: Hier aktivieren wir die Reparatur!
+        if not df_polter.empty:
+            if 'Menge_Fm' in df_polter.columns:
+                # Hier sagen wir explizit is_volume=True
+                df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
+            
+            # Koordinaten fixen
+            if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
+                # Wir wenden fix_coordinates zeilenweise an
+                coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
+                # Das gibt ein Tupel (Lat, Lon) zurück, wir müssen es splitten
+                df_polter['Lat'] = [c[0] for c in coords]
+                df_polter['Lon'] = [c[1] for c in coords]
                 
-    except: df_polter = pd.DataFrame()
+    except Exception as e: 
+        st.error(f"Polter Fehler: {e}")
+        df_polter = pd.DataFrame()
 
     # 2. STÄMME LADEN
     try:
         data_s = sh.worksheet("Einzelstaemme").get_all_records()
         df_staemme = pd.DataFrame(data_s)
         
-        # Auch hier: Text ("1,37") -> Zahl (1.37)
-        numeric_cols_s = ['Volumen_Fm', 'Laenge', 'Durchmesser']
-        for col in numeric_cols_s:
-            if col in df_staemme.columns:
-                df_staemme[col] = df_staemme[col].apply(clean_number)
+        if not df_staemme.empty:
+            # Volumen reparieren
+            if 'Volumen_Fm' in df_staemme.columns:
+                df_staemme['Volumen_Fm'] = df_staemme['Volumen_Fm'].apply(lambda x: clean_number(x, is_volume=True))
+            
+            # Andere Spalten normal bereinigen
+            for col in ['Laenge', 'Durchmesser']:
+                if col in df_staemme.columns:
+                    df_staemme[col] = df_staemme[col].apply(clean_number)
 
     except: df_staemme = pd.DataFrame()
     
@@ -251,11 +247,7 @@ with tab1:
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
                         WICHTIG: Tabelle ist ZWEISPALTIG (Daten links UND rechts).
                         
-                        Spalten-Kürzel:
-                        - "WNr" = Waldnummer
-                        - "Lä"  = Länge
-                        - "DoR" = Durchmesser
-                        - "FmoR" = Volumen/Fm
+                        Spalten-Kürzel: "WNr", "Lä", "DoR", "FmoR" (Volumen).
                         
                         --- AUFGABE 2: SUMMEN & POLTER ---
                         - Suche auf Seite 1/2 nach "Gesamtmenge".
@@ -320,15 +312,10 @@ with tab2:
         valid_pts = []
         for _, row in df_polter.iterrows():
             try:
-                # Da clean_number beim Laden lief, sind es jetzt echte Floats!
-                lat = row.get('Lat', 0)
-                lon = row.get('Lon', 0)
-                
-                # Sicherheitscheck falls doch 0
-                if lat != 0 and lon != 0:
+                lat, lon = row.get('Lat', 0), row.get('Lon', 0)
+                if lat != 0:
                     valid_pts.append({"lat": lat, "lon": lon, "info": f"Revier {row['Revier']} | P{row['Polter_Nr']}"})
             except: pass
-            
         if valid_pts:
             map_df = pd.DataFrame(valid_pts)
             m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=11)
@@ -343,7 +330,6 @@ with tab2:
             groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
             
             for (revier, los, datum), group in groups:
-                # Summe berechnen (jetzt mit echten Zahlen)
                 polter_sum = group['Menge_Fm'].sum()
                 
                 with st.expander(f"🌲 {revier} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm"):
