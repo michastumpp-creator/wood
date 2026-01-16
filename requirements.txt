@@ -6,4 +6,5 @@ streamlit-folium
 Pillow
 gspread
 google-auth
-fitz
+google-api-python-client
+pymupdf
