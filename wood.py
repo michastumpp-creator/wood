@@ -170,32 +170,28 @@ with tab1:
             content = img
 
         if st.session_state.analyzed_data is None:
-            if st.button("🚀 Analysieren"):
-                with st.spinner("Gemini sucht Stämme..."):
+            if st.button("🚀 Analysieren & Prüfen"):
+                with st.spinner("Gemini rechnet und prüft..."):
                     try:
-                        # --- VERBESSERTER PROMPT ---
+                        # --- PROMPT MIT MATHE-AUFGABE ---
                         prompt = """
-                        Analysiere diese Forst-Holzliste.
+                        Analysiere diese Forst-Holzliste exakt.
                         
-                        1. SUCHE NACH DER TABELLE "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
-                           Dort stehen die Einzelstämme. Achte auf folgende Spalten-Kürzel:
-                           - "WNr" = Waldnummer
-                           - "Lä" = Länge
-                           - "DoR" = Durchmesser (oder "D")
-                           - "FmoR" = Festmeter (Volumen)
+                        1. SUCHAUFTRAG "GESAMTMENGE":
+                           Suche irgendwo im Dokument (meist Seite 1) nach der "Gesamtmenge FmoR" oder "Summe".
+                           Extrahiere diesen Wert als 'dokument_summe'.
                         
-                        2. REGELN FÜR ZAHLEN:
-                           - "1,370" ist 1.37 (Eins Komma Drei Sieben). Ignoriere Tausenderpunkte!
-                           - Koordinaten (Lat/Lon) in Dezimalgrad umrechnen.
-                        
-                        3. EXTRAHIERE:
-                           - meta: Los, Revier, Datum
-                           - polter: Polter-Nummern & Koordinaten
-                           - staemme: Liste ALLER Einzelstämme
+                        2. SUCHAUFTRAG "POLTER & STÄMME":
+                           - Polter (Nummer, Fm, GPS).
+                           - Einzelstämme (aus Tabelle "Zusammenstellung nach Waldnummern").
+                           
+                        3. ZAHLEN-REGELN:
+                           - "1,370" = 1.37
+                           - "47,64" = 47.64
                         
                         JSON STRUKTUR:
                         {
-                            "meta": {"los": "String", "revier": "String", "datum": "String"},
+                            "meta": {"los": "String", "revier": "String", "datum": "String", "dokument_summe": Float},
                             "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
                             "staemme": [{"wnr": "String", "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
                         }
@@ -217,15 +213,43 @@ with tab1:
     if st.session_state.analyzed_data:
         data = st.session_state.analyzed_data
         
-        c1, c2 = st.columns(2)
-        c1.metric("Polter", len(data.get('polter', [])))
-        c2.metric("Stämme gefunden", len(data.get('staemme', [])))
+        # --- DER MATHE-CHECK ---
+        st.divider()
+        st.subheader("🕵️ Plausibilitäts-Check")
         
-        if data.get('staemme'):
-            st.write("Vorschau (Erste 5 Stämme):")
-            st.dataframe(pd.DataFrame(data.get('staemme', [])).head(5))
+        # 1. Was steht auf dem Papier?
+        doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
+        
+        # 2. Was haben wir gefunden (Summe der Polter)?
+        polter_list = data.get('polter', [])
+        calc_sum = sum([clean_number(p.get('fm', 0)) for p in polter_list])
+        
+        # 3. Differenz berechnen
+        diff = abs(doc_sum - calc_sum)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Soll (lt. Dokument)", f"{doc_sum:.2f} Fm")
+        c2.metric("Ist (Summe Polter)", f"{calc_sum:.2f} Fm")
+        
+        # Anzeige der Ampel
+        if doc_sum > 0:
+            if diff < 0.5: # Toleranz 0.5 Fm
+                c3.success(f"✅ Stimmt! (Diff: {diff:.2f})")
+            else:
+                c3.error(f"⚠️ Abweichung! (Diff: {diff:.2f})")
+                st.warning("Achtung: Die Summe der erkannten Polter passt nicht zur Gesamtsumme auf dem Papier. Prüfe, ob ein Polter fehlt oder eine Zahl falsch gelesen wurde (z.B. 137 statt 1.37).")
         else:
-            st.warning("⚠️ Keine Einzelstämme gefunden. Prüfe, ob die Seite 'Zusammenstellung nach Waldnummern' im PDF ist.")
+            c3.info("❓ Keine Gesamtsumme im Text gefunden.")
+
+        # --- NORMALE ANZEIGE ---
+        st.divider()
+        c_a, c_b = st.columns(2)
+        c_a.write(f"**Gefundene Polter:** {len(polter_list)}")
+        c_b.write(f"**Gefundene Stämme:** {len(data.get('staemme', []))}")
+        
+        with st.expander("Details ansehen"):
+            st.dataframe(pd.DataFrame(data.get('polter', [])))
+            st.dataframe(pd.DataFrame(data.get('staemme', [])))
 
         if st.button("💾 Speichern"):
             with st.spinner("Speichere..."):
