@@ -185,10 +185,10 @@ with tab1:
                            - Polter (Nummer, Fm, GPS).
                            - Einzelstämme (aus Tabelle "Zusammenstellung nach Waldnummern").
                            
-                        3. ZAHLEN-REGELN:
+                        3. ZAHLEN-REGELN: komma sind hier dezimalpunkte. und denk auch mit, ein einzelner stamm hat niemals mehr als 10 festmeter.
                            - "1,370" = 1.37
                            - "47,64" = 47.64
-                        
+                        4. Sag mir was du für komisch erachtest
                         JSON STRUKTUR:
                         {
                             "meta": {"los": "String", "revier": "String", "datum": "String", "dokument_summe": Float},
