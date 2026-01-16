@@ -201,7 +201,7 @@ with tab1:
                         - "Lä"  = Länge
                         - "DoR" = Durchmesser
                         - "FmoR" = Volumen/Fm
-                        Achte auf korrekte menge. 123,45 Fm sind 123.45 Fm und nicht 1234.00. 
+                        Achte auf korrekte menge. 123,45 Fm sind 123.45 Fm und nicht 1234.00. Speicher aber in den tabellen mit . als dezimaltrenner.
                         --- AUFGABE 2: SUMMEN & POLTER ---
                         - Suche  nach "Gesamtmenge".
                         - Suche Polter-Listen mit GPS.
