@@ -43,87 +43,44 @@ def clean_number(value, is_volume=False):
 
 # --- HELFER: GPS MATHE-GENIE (DMS -> DEZIMAL) ---
 def parse_dms_to_decimal(val):
-    """
-    Wandelt "48°17'06,71" korrekt um.
-    """
-    if isinstance(val, (int, float)):
-        return float(val)
-
+    if isinstance(val, (int, float)): return float(val)
     val_str = str(val).strip()
-    
-    # Regex für Grad, Minuten, Sekunden
     matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
-    
     if matches:
         try:
             d = float(matches[0][0])
             m = float(matches[0][1])
             s = float(matches[0][2].replace(',', '.'))
             return d + (m / 60.0) + (s / 3600.0)
-        except:
-            pass
-            
-    # Fallback: Versuche es als normale Zahl zu lesen
+        except: pass
     return clean_number(val)
 
 def fix_coordinates(lat, lon):
-    """
-    Zwingt Koordinaten in den deutschen Raum (Anti-Mongolei-Funktion).
-    """
-    # 1. Erstmal sauber parsen (auch DMS)
     l1 = parse_dms_to_decimal(lat)
     l2 = parse_dms_to_decimal(lon)
-
     if l1 == 0 and l2 == 0: return 0.0, 0.0
 
-    # 2. Skalieren (Millionen-Zahlen runterbrechen)
-    # Solange eine Zahl > 180 ist, ist sie keine Koordinate -> Teilen!
     def scale_down(v):
         if v == 0: return 0
-        while v > 180:
-            v /= 10.0
+        while v > 180: v /= 10.0
         return v
     
     l1 = scale_down(l1)
     l2 = scale_down(l2)
 
-    # 3. ZUORDNUNG (Wer ist Latitude, wer Longitude?)
-    # Deutschland:
-    # Latitude (Breite/Hochwert)  ~ 47.0 bis 55.0
-    # Longitude (Länge/Rechtswert) ~ 6.0 bis 15.0
-    
-    final_lat = 0.0
-    final_lon = 0.0
-    
-    # Check l1
+    final_lat, final_lon = 0.0, 0.0
+    # Deutschland Lat ~47-55, Lon ~6-15
     is_l1_lat = (47 <= l1 <= 55)
     is_l1_lon = (5 <= l1 <= 15)
-    
-    # Check l2
     is_l2_lat = (47 <= l2 <= 55)
     is_l2_lon = (5 <= l2 <= 15)
     
-    # Logik-Puzzle:
-    if is_l1_lat and is_l2_lon:
-        final_lat, final_lon = l1, l2
-    elif is_l2_lat and is_l1_lon:
-        final_lat, final_lon = l2, l1 # Tausch
+    if is_l1_lat and is_l2_lon: final_lat, final_lon = l1, l2
+    elif is_l2_lat and is_l1_lon: final_lat, final_lon = l2, l1
     else:
-        # Notfall-Plan (Mongolei-Fix):
-        # Wenn eine Zahl ~48 ist und die andere ~92 (Mongolei),
-        # dann ist die 92 wahrscheinlich eine falsch gelesene 9.2!
-        
-        # Wir suchen den Wert, der nahe 48 ist -> Das ist Lat
-        if abs(l1 - 48) < abs(l2 - 48):
-            final_lat = l1
-            final_lon = l2
-        else:
-            final_lat = l2
-            final_lon = l1
-            
-        # Wenn Longitude immer noch > 15 (z.B. 92.0), teilen wir sie weiter
-        while final_lon > 15.0:
-            final_lon /= 10.0
+        if abs(l1 - 48) < abs(l2 - 48): final_lat, final_lon = l1, l2
+        else: final_lat, final_lon = l2, l1
+        while final_lon > 15.0: final_lon /= 10.0
             
     return final_lat, final_lon
 
@@ -165,9 +122,7 @@ def save_to_sheets(data):
     polter_rows = []
     for p in data.get('polter', []):
         fm = clean_number(p.get('fm', 0))
-        # HIER WIRD GERECHNET
         lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
-        
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
@@ -233,8 +188,6 @@ def load_data_frames():
         if not df_polter.empty:
             if 'Menge_Fm' in df_polter.columns:
                 df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
-            
-            # Koordinaten: Hier nutzen wir die gleiche Logik wie beim Speichern
             if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
                 coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
                 df_polter['Lat'] = [c[0] for c in coords]
@@ -285,17 +238,17 @@ with tab1:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
                 with st.spinner("Analyse läuft..."):
                     try:
-                        # --- PROMPT ---
+                        # --- PROMPT (UNVERÄNDERT) ---
                         prompt = """
                         Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
                         --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
-                        Suche "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
+                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
                         
                         --- AUFGABE 2: EINZELSTÄMME ---
-                        Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN" oder ähnlich.
-                        WICHTIG: Die Tabelle ist oft ZWEISPALTIG. Lese alle Spalten!
-                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen. oft gibt es eine zusammenfassung der holzarten oder qualitäten. diese nicht als einzelstämme aufnehmen.
+                        Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
+                        WICHTIG: Die Tabelle ist ZWEISPALTIG. Lese beide Spalten!
+                        Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
                         
                         --- AUFGABE 3: POLTER & GPS ---
                         Suche Polter-Listen mit GPS. 
@@ -331,17 +284,13 @@ with tab1:
         st.divider()
         st.subheader("🕵️ Prüfung & Validierung")
         
-        # Daten holen
         doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(clean_number(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
         
         stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
         stamm_count = len(data.get('staemme', []))
         
-        # 3 Spalten für Checks
         c1, c2, c3 = st.columns(3)
-        
-        # Check 1: Festmeter
         with c1:
             st.markdown("**Festmeter-Check**")
             st.write(f"Soll: {doc_sum:.2f} Fm")
@@ -352,7 +301,6 @@ with tab1:
                 else: st.error(f"⚠️ Fehler (Diff: {diff:.2f})")
             else: st.info("Keine Soll-Menge gefunden")
             
-        # Check 2: Anzahl Stämme
         with c2:
             st.markdown("**Stückzahl-Check**")
             st.write(f"Soll: {doc_count} Stk")
@@ -364,7 +312,6 @@ with tab1:
                     st.error(f"⚠️ Es fehlen {diff_count} Stämme!" if diff_count > 0 else f"⚠️ Zu viele ({abs(diff_count)})!")
             else: st.info("Keine Soll-Anzahl gefunden")
             
-        # Check 3: Polter
         with c3:
             st.markdown("**Polter**")
             st.metric("Gefunden", len(data.get('polter', [])))
@@ -389,28 +336,6 @@ with tab2:
     if df_polter.empty:
         st.info("Keine Daten.")
     else:
-        # KARTE
-        st.subheader("🗺️ Karte")
-        valid_pts = []
-        for _, row in df_polter.iterrows():
-            try:
-                # Hier greift die intelligente Reparatur
-                lat, lon = fix_coordinates(row.get('Lat',0), row.get('Lon',0))
-                
-                # Filter: Nur anzeigen wenn in DE (Lat > 47)
-                if lat > 47:
-                    valid_pts.append({"lat": lat, "lon": lon, "info": f"Revier {row['Revier']} | P{row['Polter_Nr']}"})
-            except: pass
-            
-        if valid_pts:
-            map_df = pd.DataFrame(valid_pts)
-            # Zoom auf Mittelpunkt der Daten
-            m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=11)
-            for _, pt in map_df.iterrows():
-                folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
-            st_folium(m, width="100%", height=350)
-        
-        st.divider()
         st.subheader("📂 Akten")
         
         if 'Los_Nr' in df_polter.columns:
@@ -419,8 +344,19 @@ with tab2:
             for (revier, los, datum), group in groups:
                 polter_sum = group['Menge_Fm'].sum()
                 
-                with st.expander(f"🌲 {revier} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm"):
+                # Zähle Stämme für dieses Los (falls vorhanden)
+                stamm_anzahl = 0
+                match = pd.DataFrame()
+                if not df_staemme.empty:
+                    match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
+                    stamm_anzahl = len(match)
+
+                # EXPANDER TITEL MIT STAMMANZAHL
+                title = f"🌲 {revier} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm | 🪵 {stamm_anzahl} Stk"
+                
+                with st.expander(title):
                     
+                    # LÖSCH BUTTON
                     col_del, col_info = st.columns([1, 4])
                     with col_del:
                         if st.button(f"🗑️ Liste Löschen", key=f"del_{revier}_{los}_{datum}"):
@@ -430,15 +366,36 @@ with tab2:
                                     st.cache_data.clear()
                                     st.rerun()
 
-                    c1, c2 = st.columns(2)
+                    # INHALT DES EXPANDERS
+                    c1, c2 = st.columns([1, 1])
+                    
+                    # LINKS: Polter & Karte
                     with c1:
-                        st.markdown("**Polter:**")
+                        st.markdown("**Polter & GPS**")
                         st.dataframe(group[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
+                        
+                        # MINI-KARTE NUR FÜR DIESES LOS
+                        valid_pts = []
+                        for _, row in group.iterrows():
+                            try:
+                                lat, lon = row.get('Lat', 0), row.get('Lon', 0)
+                                if lat > 47:
+                                    valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
+                            except: pass
+                        
+                        if valid_pts:
+                            map_df = pd.DataFrame(valid_pts)
+                            # Eindeutiger Key für die Map, damit sie sich nicht mit anderen beißt
+                            map_key = f"map_{revier}_{los}_{datum}"
+                            m = folium.Map(location=[map_df.lat.mean(), map_df.lon.mean()], zoom_start=13)
+                            for _, pt in map_df.iterrows():
+                                folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
+                            st_folium(m, width="100%", height=250, key=map_key)
+                    
+                    # RECHTS: Stämme
                     with c2:
-                        st.markdown("**Stämme:**")
-                        if not df_staemme.empty:
-                            match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
-                            if not match.empty:
-                                st.dataframe(match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm']], hide_index=True)
-                            else:
-                                st.write("Keine Stämme.")
+                        st.markdown(f"**Einzelstämme ({stamm_anzahl}):**")
+                        if not match.empty:
+                            st.dataframe(match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm']], hide_index=True)
+                        else:
+                            st.write("Keine Einzelstämme gespeichert.")
