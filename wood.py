@@ -10,7 +10,7 @@ from google.oauth2 import service_account
 import gspread
 from datetime import datetime
 import re
-import fitz  # PyMuPDF für PDF-Highlighting
+import fitz  # PyMuPDF
 import io
 
 # --- KONFIGURATION ---
@@ -24,7 +24,7 @@ if 'last_upload' not in st.session_state:
 
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
-    """Reinigt normale Zahlen."""
+    """Reinigt Zahlen."""
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
@@ -43,99 +43,71 @@ def clean_number(value, is_volume=False):
         if 0.5 < (val / 10) < 20: return val / 10
     return val
 
-# --- HELFER: GPS (DMS -> DEZIMAL) ---
-def parse_dms_to_decimal(val):
-    if isinstance(val, (int, float)): return float(val)
-    val_str = str(val).strip()
-    matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
-    if matches:
-        try:
-            d = float(matches[0][0])
-            m = float(matches[0][1])
-            s = float(matches[0][2].replace(',', '.'))
-            return d + (m / 60.0) + (s / 3600.0)
-        except: pass
-    return clean_number(val)
-
+# --- HELFER: GPS RETTEN (DIE FUNKTIONIERENDE VERSION) ---
 def fix_coordinates(lat, lon):
-    l1 = parse_dms_to_decimal(lat)
-    l2 = parse_dms_to_decimal(lon)
+    """
+    Die einfache, robuste Logik:
+    Wenn Zahl riesig (48285197) -> Teile durch 10 bis sie passt (48.28).
+    """
+    def scale_down_gps(v):
+        v = clean_number(v)
+        if v == 0: return 0.0
+        # Latitude/Longitude sind nie größer als 180.
+        # Wenn wir z.B. 481706 haben, teilen wir so lange, bis es < 180 ist.
+        while v > 180:
+            v = v / 10.0
+        return v
+
+    l1 = scale_down_gps(lat)
+    l2 = scale_down_gps(lon)
+    
     if l1 == 0 and l2 == 0: return 0.0, 0.0
 
-    def scale_down(v):
-        if v == 0: return 0
-        while v > 180: v /= 10.0
-        return v
+    # Wer ist wer?
+    # Latitude (Breite DE) ist ~47-55
+    # Longitude (Länge DE) ist ~6-15
     
-    l1 = scale_down(l1)
-    l2 = scale_down(l2)
-
     final_lat, final_lon = 0.0, 0.0
-    # Latitude DE ~47-55
-    is_l1_lat = (47 <= l1 <= 55)
-    is_l2_lat = (47 <= l2 <= 55)
     
-    if is_l1_lat: final_lat, final_lon = l1, l2
-    elif is_l2_lat: final_lat, final_lon = l2, l1
+    # Check: Passt l1 in den Breitengrad?
+    if 40 < l1 < 60:
+        final_lat = l1
+        final_lon = l2
+    elif 40 < l2 < 60:
+        final_lat = l2
+        final_lon = l1
     else:
-        # Notfall-Logik
-        if abs(l1 - 48) < abs(l2 - 48): final_lat, final_lon = l1, l2
-        else: final_lat, final_lon = l2, l1
-        while final_lon > 15.0: final_lon /= 10.0
-            
+        # Fallback: Der größere Wert ist Lat
+        if l1 > l2: return l1, l2
+        else: return l2, l1
+        
     return final_lat, final_lon
 
-# --- NEU: PDF MARKIEREN ---
+# --- HELFER: PDF MARKIEREN ---
 def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl):
-    """
-    Sucht Text im PDF, markiert ihn bunt und gibt Bilder zurück.
-    Summe = Gelb
-    Anzahl = Blau
-    """
-    # Datei-Pointer zurücksetzen
     uploaded_file.seek(0)
-    
-    # PDF öffnen (aus Bytes)
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     images = []
 
-    # Wir suchen nach dem String (z.B. "47,64")
-    # Da clean_number floats macht (47.64), müssen wir es für die Suche evtl. wieder eindeutschen
     search_terms = []
     if text_summe > 0:
-        # Suche nach "47,64" und "47.64"
-        search_terms.append({"val": str(text_summe).replace('.', ','), "color": (1, 1, 0)}) # Gelb
+        search_terms.append({"val": str(text_summe).replace('.', ','), "color": (1, 1, 0)}) 
         search_terms.append({"val": str(text_summe), "color": (1, 1, 0)}) 
-    
     if text_anzahl > 0:
-        search_terms.append({"val": str(int(text_anzahl)), "color": (0, 1, 1)}) # Türkis/Blau
+        search_terms.append({"val": str(int(text_anzahl)), "color": (0, 1, 1)}) 
 
     for page_num, page in enumerate(doc):
-        # Nur Seite 1-3 scannen um Performance zu sparen
         if page_num > 2: break
-        
-        found_on_page = False
-        
         for item in search_terms:
-            text = item["val"]
-            color = item["color"]
-            
-            # Suche alle Vorkommen
-            quads = page.search_for(text)
-            
+            quads = page.search_for(item["val"])
             if quads:
-                found_on_page = True
                 for quad in quads:
-                    # Highlight hinzufügen
                     annot = page.add_highlight_annot(quad)
-                    annot.set_colors(stroke=color)
+                    annot.set_colors(stroke=item["color"])
                     annot.update()
-
-        # Seite als Bild rendern
         pix = page.get_pixmap(dpi=150)
         img_data = pix.tobytes("png")
         images.append(Image.open(io.BytesIO(img_data)))
-
     return images
 
 # --- GOOGLE SHEETS VERBINDUNG ---
@@ -290,14 +262,11 @@ with tab1:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
                 with st.spinner("Analyse läuft..."):
                     try:
-                        # --- PROMPT ---
                         prompt = """
                         Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
                         --- AUFGABE 1: METADATEN & STAMM-ANZAHL ---
-                        Suche auf Seite 1 nach:
-                        - "Gesamtmenge" (Fm)
-                        - "Stämme gezählt" (oder "Waldnummern gezählt").
+                        Suche auf Seite 1 nach "Gesamtmenge" (Fm) und "Stämme gezählt" (oder "Waldnummern gezählt").
                         
                         --- AUFGABE 2: EINZELSTÄMME ---
                         Suche die Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN".
@@ -305,7 +274,8 @@ with tab1:
                         Spalten: "WNr", "Lä", "DoR", "FmoR" (Volumen). nur stämme mit waldnummer zählen und aufnehmen
                         
                         --- AUFGABE 3: POLTER & GPS ---
-                        Suche Polter-Listen mit GPS. Extrahiere DMS String z.B. "48°17'06,71".
+                        Suche Polter-Listen mit GPS. 
+                        ACHTUNG: Format ist oft DMS (Grad Minute Sekunde). Extrahiere den String exakt so wie er da steht, z.B. "48°17'06,71".
                         
                         --- JSON STRUKTUR ---
                         {
@@ -340,21 +310,15 @@ with tab1:
         doc_sum = clean_number(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(clean_number(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
         
-        # --- PDF VISUALISIERUNG ---
+        # PDF HIGHLIGHT
         if uploaded_file.type == "application/pdf":
-            with st.expander("📄 PDF-Check: Wo stehen die Zahlen?", expanded=True):
-                # Wir suchen die Zahlen im PDF und malen sie an
+            with st.expander("📄 PDF-Check (Visuell)", expanded=True):
                 marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count)
-                
-                # Legende
-                st.caption("🟡 Gelb = Gefundene Festmeter-Summe | 🔵 Blau = Gefundene Stamm-Anzahl")
-                
-                # Bilder anzeigen (nur Seite 1-2 wo die Summen meist stehen)
+                st.caption("🟡 Gelb = Gefundene Festmeter | 🔵 Blau = Gefundene Stückzahl")
                 cols = st.columns(len(marked_images))
                 for idx, img in enumerate(marked_images):
                     with cols[idx]:
                         st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
-        # --------------------------
 
         stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
         stamm_count = len(data.get('staemme', []))
@@ -372,8 +336,8 @@ with tab1:
             
         with c2:
             st.markdown("**Stückzahl-Check**")
-            st.write(f"Soll: {doc_count}")
-            st.write(f"Ist: {stamm_count}")
+            st.write(f"Soll: {doc_count} Stk")
+            st.write(f"Ist: {stamm_count} Stk")
             if doc_count > 0:
                 if doc_count == stamm_count: st.success("✅ OK")
                 else: st.error(f"⚠️ Diff: {doc_count - stamm_count}")
