@@ -23,19 +23,7 @@ if 'last_upload' not in st.session_state:
     st.session_state.last_upload = None
 
 # --- HELFER: ZAHLEN RETTEN ---
-def clean_number(value, is_volume=False):
-    """Reinigt normale Zahlen."""
-    if isinstance(value, (int, float)):
-        val = float(value)
-    elif isinstance(value, str):
-        clean = value.replace(',', '.')
-        clean = re.sub(r'[^\d.]', '', clean)
-        try:
-            val = float(clean)
-        except:
-            return 0.0
-    else:
-        return 0.0
+
 
     # Volumen-Plausibilität
     if is_volume and val > 20.0:
