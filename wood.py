@@ -24,14 +24,11 @@ if 'last_upload' not in st.session_state:
 
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
-    """
-    Reinigt Zahlen. Macht aus "1,37" -> 1.37
-    """
+    """Reinigt normale Zahlen."""
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
         clean = value.replace(',', '.')
-        # Alles entfernen was keine Zahl oder Punkt ist
         clean = re.sub(r'[^\d.]', '', clean)
         try:
             val = float(clean)
@@ -40,47 +37,50 @@ def clean_number(value, is_volume=False):
     else:
         return 0.0
 
-    # Volumen-Plausibilität (Ein Stamm hat selten > 20 Fm)
+    # Volumen-Plausibilität
     if is_volume and val > 20.0:
         if 0.5 < (val / 100) < 20: return val / 100
         if 0.5 < (val / 10) < 20: return val / 10
     return val
 
-# --- HELFER: GPS RETTEN (DIE EINFACHE METHODE) ---
+# --- HELFER: GPS (DMS -> DEZIMAL) ---
+def parse_dms_to_decimal(val):
+    """
+    Wandelt nur das kryptische DMS Format ($48^{\circ}...) in eine Zahl um.
+    Fasst normale Zahlen NICHT an.
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+
+    val_str = str(val).strip()
+    
+    # Regex für Grad, Minuten, Sekunden (z.B. 48°17'06,71)
+    matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
+    
+    if matches:
+        try:
+            d = float(matches[0][0])
+            m = float(matches[0][1])
+            s = float(matches[0][2].replace(',', '.'))
+            # Formel: Grad + Min/60 + Sek/3600
+            return d + (m / 60.0) + (s / 3600.0)
+        except:
+            pass
+            
+    # Wenn kein DMS erkannt wurde, versuchen wir es als normale Zahl zu lesen
+    return clean_number(val)
+
 def fix_coordinates(lat, lon):
     """
-    Ignoriert Punkte/Kommas. Nimmt nur die Ziffern und schiebt das Komma,
-    bis es in Deutschland liegt.
+    MINIMAL-LOGIK:
+    Wir rechnen DMS um (weil 48°17' sonst Text bleibt).
+    ABER: Wir teilen NICHT durch 10. Wir tauschen NICHT Lat/Lon.
+    Wir lassen die Werte exakt so, wie sie sind.
     """
-    # 1. Alles entfernen außer reine Ziffern (48°17' -> "4817")
-    l1_str = re.sub(r'[^\d]', '', str(lat))
-    l2_str = re.sub(r'[^\d]', '', str(lon))
+    l1 = parse_dms_to_decimal(lat)
+    l2 = parse_dms_to_decimal(lon)
     
-    if not l1_str or not l2_str: return 0.0, 0.0
-    
-    l1 = float(l1_str)
-    l2 = float(l2_str)
-
-    # 2. Skalieren: Solange durch 10 teilen, bis die Zahl < 100 ist
-    # Damit wird aus 48285197 -> 48.285197
-    def force_german_scale(val):
-        if val == 0: return 0.0
-        while val > 100:
-            val = val / 10.0
-        return val
-
-    l1 = force_german_scale(l1)
-    l2 = force_german_scale(l2)
-    
-    # 3. Wer ist was?
-    # In Deutschland ist Latitude (47-55) IMMER größer als Longitude (6-15)
-    final_lat = max(l1, l2)
-    final_lon = min(l1, l2)
-    
-    # Plausibilitätscheck: Wenn Koordinaten 0 sind, abbrechen
-    if final_lat < 1: return 0.0, 0.0
-        
-    return final_lat, final_lon
+    return l1, l2
 
 # --- HELFER: PDF MARKIEREN ---
 def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl):
@@ -147,7 +147,9 @@ def save_to_sheets(data):
     polter_rows = []
     for p in data.get('polter', []):
         fm = clean_number(p.get('fm', 0))
+        # Koordinaten holen (ohne Tricks)
         lat, lon = fix_coordinates(p.get('lat', 0), p.get('lon', 0))
+        
         link = f"http://maps.google.com/?q={lat},{lon}" if lat != 0 else ""
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
@@ -213,7 +215,6 @@ def load_data_frames():
             if 'Menge_Fm' in df_polter.columns:
                 df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
             if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
-                # Hier wenden wir die gleiche Reparatur-Logik beim Laden an!
                 coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
                 df_polter['Lat'] = [c[0] for c in coords]
                 df_polter['Lon'] = [c[1] for c in coords]
@@ -262,6 +263,7 @@ with tab1:
             if st.button("🚀 Analysieren (Gemini 3 Preview)"):
                 with st.spinner("Analyse läuft..."):
                     try:
+                        # --- PROMPT ---
                         prompt = """
                         Du bist ein KI-Assistent für deutsche Forstwirtschaft. Analysiere dieses Dokument exakt.
                         
@@ -313,12 +315,15 @@ with tab1:
         # PDF HIGHLIGHT
         if uploaded_file.type == "application/pdf":
             with st.expander("📄 PDF-Check (Visuell)", expanded=True):
-                marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count)
-                st.caption("🟡 Gelb = Gefundene Festmeter | 🔵 Blau = Gefundene Stückzahl")
-                cols = st.columns(len(marked_images))
-                for idx, img in enumerate(marked_images):
-                    with cols[idx]:
-                        st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
+                try:
+                    marked_images = create_highlighted_pdf_images(uploaded_file, doc_sum, doc_count)
+                    st.caption("🟡 Gelb = Gefundene Festmeter | 🔵 Blau = Gefundene Stückzahl")
+                    cols = st.columns(len(marked_images))
+                    for idx, img in enumerate(marked_images):
+                        with cols[idx]:
+                            st.image(img, caption=f"Seite {idx+1}", use_container_width=True)
+                except Exception as e:
+                    st.warning(f"Konnte PDF nicht markieren (Installiere pymupdf?): {e}")
 
         stamm_sum = sum([clean_number(s.get('fm', 0), True) for s in data.get('staemme', [])])
         stamm_count = len(data.get('staemme', []))
@@ -398,7 +403,8 @@ with tab2:
                         for _, row in group.iterrows():
                             try:
                                 lat, lon = row.get('Lat', 0), row.get('Lon', 0)
-                                if lat > 47:
+                                # Filter: Zeige nur Punkte an, die halbwegs Sinn machen (Lat > 40)
+                                if lat > 40:
                                     valid_pts.append({"lat": lat, "lon": lon, "info": f"P{row['Polter_Nr']}"})
                             except: pass
                         if valid_pts:
