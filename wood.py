@@ -188,6 +188,7 @@ with tab1:
                         3. ZAHLEN-REGELN: komma sind hier dezimalpunkte. und denk auch mit, ein einzelner stamm hat niemals mehr als 10 festmeter.
                            - "1,370" = 1.37
                            - "47,64" = 47.64
+                           speicher auch korrekt die werte und nicht dezimalstellen fallen lassen
                         4. Sag mir was du für komisch erachtest
                         JSON STRUKTUR:
                         {
