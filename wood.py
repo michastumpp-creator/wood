@@ -24,11 +24,14 @@ if 'last_upload' not in st.session_state:
 
 # --- HELFER: ZAHLEN RETTEN ---
 def clean_number(value, is_volume=False):
-    """Reinigt Zahlen."""
+    """
+    Reinigt Zahlen. Macht aus "1,37" -> 1.37
+    """
     if isinstance(value, (int, float)):
         val = float(value)
     elif isinstance(value, str):
         clean = value.replace(',', '.')
+        # Alles entfernen was keine Zahl oder Punkt ist
         clean = re.sub(r'[^\d.]', '', clean)
         try:
             val = float(clean)
@@ -37,49 +40,45 @@ def clean_number(value, is_volume=False):
     else:
         return 0.0
 
-    # Volumen-Plausibilität
+    # Volumen-Plausibilität (Ein Stamm hat selten > 20 Fm)
     if is_volume and val > 20.0:
         if 0.5 < (val / 100) < 20: return val / 100
         if 0.5 < (val / 10) < 20: return val / 10
     return val
 
-# --- HELFER: GPS RETTEN (DIE FUNKTIONIERENDE VERSION) ---
+# --- HELFER: GPS RETTEN (DIE EINFACHE METHODE) ---
 def fix_coordinates(lat, lon):
     """
-    Die einfache, robuste Logik:
-    Wenn Zahl riesig (48285197) -> Teile durch 10 bis sie passt (48.28).
+    Ignoriert Punkte/Kommas. Nimmt nur die Ziffern und schiebt das Komma,
+    bis es in Deutschland liegt.
     """
-    def scale_down_gps(v):
-        v = clean_number(v)
-        if v == 0: return 0.0
-        # Latitude/Longitude sind nie größer als 180.
-        # Wenn wir z.B. 481706 haben, teilen wir so lange, bis es < 180 ist.
-        while v > 180:
-            v = v / 10.0
-        return v
+    # 1. Alles entfernen außer reine Ziffern (48°17' -> "4817")
+    l1_str = re.sub(r'[^\d]', '', str(lat))
+    l2_str = re.sub(r'[^\d]', '', str(lon))
+    
+    if not l1_str or not l2_str: return 0.0, 0.0
+    
+    l1 = float(l1_str)
+    l2 = float(l2_str)
 
-    l1 = scale_down_gps(lat)
-    l2 = scale_down_gps(lon)
-    
-    if l1 == 0 and l2 == 0: return 0.0, 0.0
+    # 2. Skalieren: Solange durch 10 teilen, bis die Zahl < 100 ist
+    # Damit wird aus 48285197 -> 48.285197
+    def force_german_scale(val):
+        if val == 0: return 0.0
+        while val > 100:
+            val = val / 10.0
+        return val
 
-    # Wer ist wer?
-    # Latitude (Breite DE) ist ~47-55
-    # Longitude (Länge DE) ist ~6-15
+    l1 = force_german_scale(l1)
+    l2 = force_german_scale(l2)
     
-    final_lat, final_lon = 0.0, 0.0
+    # 3. Wer ist was?
+    # In Deutschland ist Latitude (47-55) IMMER größer als Longitude (6-15)
+    final_lat = max(l1, l2)
+    final_lon = min(l1, l2)
     
-    # Check: Passt l1 in den Breitengrad?
-    if 40 < l1 < 60:
-        final_lat = l1
-        final_lon = l2
-    elif 40 < l2 < 60:
-        final_lat = l2
-        final_lon = l1
-    else:
-        # Fallback: Der größere Wert ist Lat
-        if l1 > l2: return l1, l2
-        else: return l2, l1
+    # Plausibilitätscheck: Wenn Koordinaten 0 sind, abbrechen
+    if final_lat < 1: return 0.0, 0.0
         
     return final_lat, final_lon
 
@@ -214,6 +213,7 @@ def load_data_frames():
             if 'Menge_Fm' in df_polter.columns:
                 df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(lambda x: clean_number(x, is_volume=True))
             if 'Lat' in df_polter.columns and 'Lon' in df_polter.columns:
+                # Hier wenden wir die gleiche Reparatur-Logik beim Laden an!
                 coords = df_polter.apply(lambda row: fix_coordinates(row.get('Lat',0), row.get('Lon',0)), axis=1)
                 df_polter['Lat'] = [c[0] for c in coords]
                 df_polter['Lon'] = [c[1] for c in coords]
@@ -275,7 +275,7 @@ with tab1:
                         
                         --- AUFGABE 3: POLTER & GPS ---
                         Suche Polter-Listen mit GPS. 
-                        ACHTUNG: Format ist oft DMS (Grad Minute Sekunde). Extrahiere den String exakt so wie er da steht, z.B. "48°17'06,71".
+                        Extrahiere den GPS-String exakt so wie er da steht, z.B. "48°17'06,71".
                         
                         --- JSON STRUKTUR ---
                         {
