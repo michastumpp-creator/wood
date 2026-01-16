@@ -37,7 +37,7 @@ def upload_to_drive(data, filename_base):
         
         folder_id = st.secrets["DRIVE_FOLDER_ID"]
         
-        # Dateinamen generieren (z.B. 915_2025...json)
+        # Dateinamen generieren
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         clean_base = "".join([c for c in filename_base if c.isalnum() or c in (' ', '-', '_')]).rstrip()
         filename = f"{clean_base}_{timestamp}.json"
@@ -51,6 +51,7 @@ def upload_to_drive(data, filename_base):
             'parents': [folder_id]
         }
         
+        # WICHTIG: Wir laden es als 'application/json' hoch
         media = MediaIoBaseUpload(file_stream, mimetype='application/json')
         
         file = service.files().create(
@@ -65,37 +66,41 @@ def upload_to_drive(data, filename_base):
         return None
 
 def list_drive_files():
-    """Lädt alle gespeicherten Listen aus dem Ordner"""
+    """Lädt alle Dateien und filtert manuell"""
     try:
         service = get_drive_service()
         if not service: return []
         
         folder_id = st.secrets["DRIVE_FOLDER_ID"]
         
-        # Nur JSON Dateien suchen, die nicht im Papierkorb sind
-        query = f"'{folder_id}' in parents and mimeType = 'application/json' and trashed = false"
+        # FIX: Wir suchen ALLES im Ordner (nicht nur JSON), damit wir nichts übersehen
+        query = f"'{folder_id}' in parents and trashed = false"
         
         results = service.files().list(
             q=query,
             pageSize=100,
-            fields="nextPageToken, files(id, name)"
+            fields="nextPageToken, files(id, name, mimeType)"
         ).execute()
         
         files = results.get('files', [])
         
         all_data = []
         for file in files:
-            # Inhalt herunterladen
-            request = service.files().get_media(fileId=file['id'])
-            file_content = request.execute()
-            
+            # Wir versuchen JEDE Datei zu lesen, egal welcher Typ
             try:
+                request = service.files().get_media(fileId=file['id'])
+                file_content = request.execute()
+                
+                # Versuch: Ist es ein JSON?
                 content = json.loads(file_content.decode('utf-8'))
+                
+                # Wenn wir hier sind, war es erfolgreich!
                 content['datei'] = file['name']
                 content['drive_id'] = file['id']
                 all_data.append(content)
-            except:
-                continue # Kaputte Dateien überspringen
+            except Exception:
+                # Datei war kein JSON oder leer -> Überspringen
+                continue
                 
         return all_data
     except Exception as e:
@@ -105,26 +110,29 @@ def list_drive_files():
 # --- APP OBERFLÄCHE ---
 st.title("🌲 Forst-Verwaltung (Cloud)")
 
-# --- DIAGNOSE BUTTON (Nur zur Sicherheit) ---
-with st.expander("🛠️ Verbindung testen (bei Problemen hier klicken)"):
+# --- DIAGNOSE BUTTON ---
+with st.expander("🛠️ Verbindung testen"):
     if st.button("Testlauf starten"):
         try:
             service = get_drive_service()
             fid = st.secrets["DRIVE_FOLDER_ID"]
-            # Versuch, den Ordner zu lesen
             f = service.files().get(fileId=fid).execute()
             st.success(f"✅ Zugriff OK! Verbunden mit Ordner: '{f.get('name')}'")
-            st.info("Wenn der Ordner leer ist, hast du noch nichts gespeichert.")
+            
+            # Zeige Anzahl der Dateien im Ordner (Debugging)
+            q = f"'{fid}' in parents and trashed = false"
+            res = service.files().list(q=q).execute()
+            count = len(res.get('files', []))
+            st.info(f"Der Roboter sieht aktuell {count} Dateien in diesem Ordner.")
+            
         except Exception as e:
             st.error(f"❌ Zugriff verweigert: {e}")
-            st.warning("Prüfe: Hast du den Ordner mit der 'client_email' geteilt?")
 
 
 tab1, tab2 = st.tabs(["📸 Neue Liste scannen", "🗂️ Archiv (Drive)"])
 
 # --- TAB 1: SCANNER ---
 with tab1:
-    # API Key Prüfung
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
         client = genai.Client(api_key=api_key)
@@ -137,7 +145,6 @@ with tab1:
     if uploaded_file:
         file_content_for_gemini = None
         
-        # PDF oder Bild Unterscheidung
         if uploaded_file.type == "application/pdf":
             st.info(f"📄 PDF erkannt: {uploaded_file.name}")
             file_bytes = uploaded_file.getvalue()
@@ -170,7 +177,6 @@ with tab1:
                 """
                 
                 try:
-                    # Aufruf an Gemini
                     response = client.models.generate_content(
                         model="models/gemini-2.0-flash",
                         contents=[prompt, file_content_for_gemini],
@@ -178,46 +184,44 @@ with tab1:
                     )
                     
                     if response.text:
-                        # Bereinigung
                         clean_text = response.text.replace("```json", "").replace("```", "").strip()
                         data = json.loads(clean_text)
                         
                         st.success("Analyse erfolgreich!")
                         
-                        # Ergebnis anzeigen
                         if 'polter' in data:
                             st.dataframe(pd.DataFrame(data['polter']))
                         
-                        # SPEICHER-BUTTON
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("💾 In Google Drive speichern"):
-                                with st.spinner("Lade hoch..."):
-                                    # Name aus Los-Nummer oder Dateiname
-                                    base_name = data.get('meta', {}).get('los', 'Unbekannt')
-                                    saved_name = upload_to_drive(data, base_name)
-                                    
-                                    if saved_name:
-                                        st.balloons()
-                                        st.success(f"Gespeichert als: {saved_name}")
-                                        st.info("Wechsle jetzt zum Reiter 'Archiv', um es zu sehen.")
+                        # SPEICHERN
+                        if st.button("💾 In Google Drive speichern"):
+                            with st.spinner("Lade hoch..."):
+                                base_name = data.get('meta', {}).get('los', 'Unbekannt')
+                                saved_name = upload_to_drive(data, base_name)
+                                
+                                if saved_name:
+                                    st.balloons()
+                                    st.success(f"Gespeichert als: {saved_name}")
+                                    st.info("Wechsle jetzt zum Reiter 'Archiv' und klicke 'Aktualisieren'.")
                                     
                 except Exception as e:
                     st.error(f"Fehler bei der Analyse: {e}")
 
 # --- TAB 2: ARCHIV ---
 with tab2:
-    if st.button("🔄 Archiv aktualisieren"):
-        st.cache_data.clear()
+    col_a, col_b = st.columns([1, 4])
+    with col_a:
+        if st.button("🔄 Archiv aktualisieren"):
+            st.cache_data.clear()
     
-    st.write("Lade Daten aus Google Drive...")
-    all_records = list_drive_files()
+    with st.spinner("Lade Daten aus Google Drive..."):
+        all_records = list_drive_files()
     
     if not all_records:
-        st.info("Dein Drive-Ordner ist leer (oder nicht erreichbar). Speichere erst eine Liste in Tab 1.")
+        st.warning("Keine lesbaren Listen gefunden.")
+        st.write("Tipp: Lade eine Datei in Tab 1 hoch und speichere sie.")
     else:
-        # 1. Tabelle
-        st.subheader("📋 Liste aller Bestände")
+        # TABELLE
+        st.subheader(f"📋 Gefundene Listen: {len(all_records)}")
         overview_data = []
         for r in all_records:
             meta = r.get('meta', {})
@@ -231,17 +235,16 @@ with tab2:
             })
         st.dataframe(pd.DataFrame(overview_data), use_container_width=True)
         
-        # 2. Karte
+        # KARTE
         st.subheader("📍 Karte aller Polter")
         all_polter_coords = []
         
         for r in all_records:
             los_name = r.get('meta', {}).get('los', '?')
             for p in r.get('polter', []):
-                # Nur Polter mit echten Koordinaten anzeigen
-                if 'lat' in p and 'lon' in p and p['lat'] is not None and p['lon'] is not None:
-                    # Check auf 0.0 Koordinaten (Fehlerfilter)
-                    if p['lat'] != 0 and p['lon'] != 0:
+                if 'lat' in p and 'lon' in p and p['lat'] is not None:
+                    # Filter: Ignoriere 0.0 Koordinaten
+                    if abs(p['lat']) > 1 and abs(p['lon']) > 1:
                         all_polter_coords.append({
                             "lat": p['lat'],
                             "lon": p['lon'],
@@ -250,7 +253,6 @@ with tab2:
         
         if all_polter_coords:
             df_map = pd.DataFrame(all_polter_coords)
-            # Mittelpunkt finden
             mid_lat = df_map['lat'].mean()
             mid_lon = df_map['lon'].mean()
             
@@ -265,4 +267,4 @@ with tab2:
             
             st_folium(m, width=900, height=500)
         else:
-            st.warning("Es wurden noch keine Polter mit GPS-Daten gespeichert.")
+            st.info("In den gespeicherten Listen wurden keine GPS-Daten gefunden.")
