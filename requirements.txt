@@ -6,3 +6,4 @@ streamlit-folium
 Pillow
 gspread
 google-auth
+fitz
