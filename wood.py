@@ -53,6 +53,12 @@ def save_to_sheets(data):
     if not sh: return False
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # Sicherheits-Check: Falls data doch kein Dict ist
+    if not isinstance(data, dict):
+        st.error("Datenformat falsch (kein Dictionary). Speichern abgebrochen.")
+        return False
+
     meta = data.get('meta', {})
     los = meta.get('los', 'Unbekannt')
     revier = meta.get('revier', '-')
@@ -144,18 +150,16 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button("🚀 Analysieren"):
-                with st.spinner("Gemini arbeitet (Kommas -> Punkte)..."):
+                with st.spinner("Gemini arbeitet..."):
                     try:
                         prompt = """
                         Analysiere diese Holzliste.
-                        REGEL: Wandle Kommas in Zahlen zwingend in PUNKTE um (1,50 -> 1.50).
                         
-                        Suche:
-                        1. Metadaten (Los, Revier)
-                        2. Polter (GPS in Dezimalgrad!)
-                        3. Einzelstämme (WNr, Länge, Durchmesser, Güte, Fm)
+                        REGEL:
+                        1. Wandle Kommas in Zahlen in PUNKTE um (1,50 -> 1.50).
+                        2. Gib mir ZWINGEND ein JSON-Objekt {} zurück, KEINE Liste [].
                         
-                        JSON:
+                        Struktur:
                         {
                             "meta": {"los": "String", "revier": "String"},
                             "polter": [{"nr": Int, "fm": Float, "lat": Float, "lon": Float}],
@@ -168,30 +172,51 @@ with tab1:
                             config=types.GenerateContentConfig(response_mime_type="application/json")
                         )
                         clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                        st.session_state.analyzed_data = json.loads(clean_text)
+                        raw_data = json.loads(clean_text)
+                        
+                        # --- HIER IST DER FIX FÜR DEINEN FEHLER ---
+                        # Wenn die KI eine Liste [] schickt, machen wir ein Dict {} daraus.
+                        if isinstance(raw_data, list):
+                            st.warning("⚠️ KI hat Listen-Format gesendet. Korrigiere Struktur automatisch...")
+                            # Wir raten: Ist es eine Liste von Poltern?
+                            data = {"polter": raw_data, "meta": {}, "staemme": []}
+                        else:
+                            data = raw_data
+                        # ------------------------------------------
+
+                        st.session_state.analyzed_data = data
                         st.rerun()
                     except Exception as e:
                         st.error(f"Fehler: {e}")
 
+    # ANZEIGE
     if st.session_state.analyzed_data:
-        data = st.session_state.analyzed_data
-        st.subheader("Vorschau:")
-        st.dataframe(pd.DataFrame(data.get('polter', [])))
-        st.dataframe(pd.DataFrame(data.get('staemme', [])))
-        
-        if st.button("💾 Speichern"):
-            if save_to_sheets(data):
-                st.success("Gespeichert!")
-                st.info("Wechsle zu Tab 2.")
+        # Sicherheits-Check vor Zugriff
+        if isinstance(st.session_state.analyzed_data, dict):
+            data = st.session_state.analyzed_data
+            
+            st.subheader("Vorschau:")
+            st.write("Polter:")
+            st.dataframe(pd.DataFrame(data.get('polter', [])))
+            st.write("Einzelstämme:")
+            st.dataframe(pd.DataFrame(data.get('staemme', [])))
+            
+            if st.button("💾 Speichern"):
+                if save_to_sheets(data):
+                    st.success("Gespeichert!")
+                    st.info("Wechsle zu Tab 2.")
+        else:
+            st.error("Datenformat ist immer noch falsch. Bitte Scan wiederholen.")
+            st.session_state.analyzed_data = None # Reset
 
-# --- TAB 2 (HIER WAR DER FEHLER) ---
+# --- TAB 2 ---
 with tab2:
     if st.button("🔄 Aktualisieren"):
         st.cache_data.clear()
         
     df_polter, df_staemme = load_data_frames()
     
-    # 1. POLTER KARTE
+    # POLTER KARTE
     st.subheader("🗺️ Polter Karte")
     if not df_polter.empty and 'Lat' in df_polter.columns:
         valid_pts = []
@@ -212,10 +237,9 @@ with tab2:
     else:
         st.info("Keine Polter-Daten gefunden.")
 
-    # 2. EINZELSTÄMME (FEHLER BEHOBEN)
+    # EINZELSTÄMME
     st.subheader("🪵 Einzelstämme")
     
-    # WICHTIG: Wir prüfen erst, ob die Spalte existiert!
     if not df_staemme.empty and 'Los_Nr' in df_staemme.columns:
         all_lose = df_staemme['Los_Nr'].unique()
         selected_los = st.selectbox("Filter Los:", ["Alle"] + list(all_lose))
@@ -231,5 +255,4 @@ with tab2:
              summe = df_show['Volumen_Fm'].apply(clean_number).sum()
              st.metric("Summe Volumen", f"{summe:.2f} Fm")
     else:
-        st.warning("Noch keine Einzelstämme gespeichert (oder Tabelle leer).")
-        st.write("Tipp: Lade in Tab 1 eine Liste hoch und klicke 'Speichern'.")
+        st.warning("Tabelle 'Einzelstaemme' ist leer oder hat falsches Format.")
