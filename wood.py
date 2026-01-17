@@ -287,6 +287,19 @@ def show_files_section(file_paths):
                     st.image(path, width=150)
         else: st.warning(f"Datei fehlt: {path}")
 
+# --- HOLZARTEN KLASSIFIZIERUNG ---
+def get_species_group(holzart):
+    h = str(holzart).lower()
+    if "bu" in h: return "Buche"
+    if "es" in h: return "Esche"
+    return "Sonstige"
+
+def get_species_stats(df_subset):
+    if df_subset.empty: return 0, 0, 0
+    df_subset['Gruppe'] = df_subset['Holzart'].apply(get_species_group)
+    grp = df_subset.groupby('Gruppe')['Volumen_Fm'].sum()
+    return grp.get('Buche', 0), grp.get('Esche', 0), grp.get('Sonstige', 0)
+
 # --- SEITENLEISTE ---
 with st.sidebar:
     st.header("⚙️ Verwaltung")
@@ -400,55 +413,58 @@ with tab2:
     
     if df_p.empty: st.info("Leer.")
     else:
-        st.subheader("📊 Lager")
+        st.subheader("📊 Lager-Übersicht")
         
-        # 1. KPI REIHE (STATUS)
+        # --- DATEN-AGGREGATION ---
         total_fm = df_p['Menge_Fm'].sum()
         done_fm = df_p[df_p['Geliefert'] == True]['Menge_Fm'].sum()
         remaining_fm = total_fm - done_fm
         fsc_mask = df_p['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
         fsc_fm = df_p[fsc_mask]['Menge_Fm'].sum()
         
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("🪵 Gekauft (Gesamt)", f"{total_fm:.2f} Fm")
-        c2.metric("🚛 Abgefahren", f"{done_fm:.2f} Fm")
-        c3.metric("🌲 Noch im Wald", f"{remaining_fm:.2f} Fm")
-        c4.metric("✅ Davon FSC", f"{fsc_fm:.2f} Fm")
-        
-        # 2. KPI REIHE (HOLZARTEN) - Nur wenn Stämme vorhanden sind
-        if not df_s.empty and 'Holzart' in df_s.columns:
-            # Wir machen eine unscharfe Suche auf dem DataFrame
-            df_s['Art_Lower'] = df_s['Holzart'].astype(str).str.lower()
+        # Holzarten-Aufschlüsselung (basierend auf Einzelstämmen für Präzision)
+        if not df_s.empty:
+            df_s_done = df_s[df_s['Geliefert'] == True].copy()
+            df_s_left = df_s[df_s['Geliefert'] == False].copy()
+            df_s_fsc = df_s[df_s['Datum_Upload'].isin(df_p[fsc_mask]['Datum_Upload'])].copy() # Näherung via Upload-Zeitstempel
             
-            def get_vol(keyword):
-                mask = df_s['Art_Lower'].str.contains(keyword, na=False)
-                return df_s[mask]['Volumen_Fm'].sum()
-            
-            vol_bu = get_vol("buch") # Buche, Rotbuche
-            vol_ei = get_vol("eich") # Eiche, Stieleiche
-            vol_es = get_vol("esch") # Esche
-            # Nadelholz / Rest (Fichte, Kiefer, Tanne oder alles andere)
-            vol_nd = get_vol("fich") + get_vol("kief") + get_vol("tan") 
-            
-            c5, c6, c7, c8 = st.columns(4)
-            c5.metric("🌳 Buche", f"{vol_bu:.2f} Fm")
-            c6.metric("🌳 Eiche", f"{vol_ei:.2f} Fm")
-            c7.metric("🌳 Esche", f"{vol_es:.2f} Fm")
-            c8.metric("🌲 Nadel/Andere", f"{vol_nd:.2f} Fm")
+            bu_tot, es_tot, so_tot = get_species_stats(df_s.copy())
+            bu_done, es_done, so_done = get_species_stats(df_s_done)
+            bu_left, es_left, so_left = get_species_stats(df_s_left)
+            bu_fsc, es_fsc, so_fsc = get_species_stats(df_s_fsc)
+        else:
+            bu_tot = es_tot = so_tot = 0
+            bu_done = es_done = so_done = 0
+            bu_left = es_left = so_left = 0
+            bu_fsc = es_fsc = so_fsc = 0
 
+        # --- ANZEIGE UI ---
+        c1, c2, c3, c4 = st.columns(4)
+        
+        # 1. Gekauft
+        c1.metric("🪵 Gekauft (Gesamt)", f"{total_fm:.2f} Fm")
+        c1.markdown(f"**Bu:** {bu_tot:.1f} | **Es:** {es_tot:.1f} | **So:** {so_tot:.1f}")
+        
+        # 2. Abgefahren
+        c2.metric("🚛 Abgefahren", f"{done_fm:.2f} Fm")
+        c2.markdown(f"**Bu:** {bu_done:.1f} | **Es:** {es_done:.1f} | **So:** {so_done:.1f}")
+        
+        # 3. Rest
+        c3.metric("🌲 Noch im Wald", f"{remaining_fm:.2f} Fm")
+        c3.markdown(f"**Bu:** {bu_left:.1f} | **Es:** {es_left:.1f} | **So:** {so_left:.1f}")
+        
+        # 4. FSC
+        c4.metric("✅ Davon FSC", f"{fsc_fm:.2f} Fm")
+        c4.markdown(f"**Bu:** {bu_fsc:.1f} | **Es:** {es_fsc:.1f} | **So:** {so_fsc:.1f}")
+        
         st.divider()
         
-        c_st, c_mp = st.columns([1, 1])
-        with c_st:
-            if not df_s.empty and 'Holzart' in df_s.columns:
-                stats = df_s.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
-                st.dataframe(stats, height=150, use_container_width=True)
-        with c_mp:
-            pts = [{"lat": parse_gps_for_map(r['Lat']), "lon": parse_gps_for_map(r['Lon']), "info": f"Los {r['Los_Nr']}"} for _, r in df_p.iterrows() if parse_gps_for_map(r['Lat'])>0]
-            if pts:
-                m = folium.Map([pd.DataFrame(pts).lat.mean(), pd.DataFrame(pts).lon.mean()], zoom_start=9)
-                for p in pts: folium.Marker([p['lat'], p['lon']], popup=p['info'], icon=folium.Icon(color="blue", icon="tree", prefix='fa')).add_to(m)
-                st_folium(m, width="100%", height=200, key="gm1")
+        # Karte
+        pts = [{"lat": parse_gps_for_map(r['Lat']), "lon": parse_gps_for_map(r['Lon']), "info": f"Los {r['Los_Nr']}"} for _, r in df_p.iterrows() if parse_gps_for_map(r['Lat'])>0]
+        if pts:
+            m = folium.Map([pd.DataFrame(pts).lat.mean(), pd.DataFrame(pts).lon.mean()], zoom_start=9)
+            for p in pts: folium.Marker([p['lat'], p['lon']], popup=p['info'], icon=folium.Icon(color="blue", icon="tree", prefix='fa')).add_to(m)
+            st_folium(m, width="100%", height=200, key="gm1")
 
         st.divider(); st.subheader("📂 Akten")
         if 'Datum_Upload' in df_p.columns:
