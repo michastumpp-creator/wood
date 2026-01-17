@@ -155,12 +155,10 @@ def move_to_transport(timestamp):
 def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
     db = load_db()
     
-    # Notiz Update
     for p in db['polter']:
         if p.get('Datum_Upload') == timestamp:
             p['Notiz'] = new_note
 
-    # Polter Update
     if not polter_df.empty:
         for index, row in polter_df.iterrows():
             for p in db['polter']:
@@ -168,7 +166,6 @@ def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
                     if 'Geliefert' in row: p['Geliefert'] = row['Geliefert']
                     break
     
-    # Stämme Update
     if not staemme_df.empty:
         for index, row in staemme_df.iterrows():
             for s in db['staemme']:
@@ -316,17 +313,14 @@ with tab2:
             
             for (ut, rev, los), grp in groups:
                 is_trans = grp['Status'].iloc[0] == 'Transport'
+                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
+                note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
                 polter_sum = grp['Menge_Fm'].sum()
                 ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
                 zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
-                datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
-                note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
-
-                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
                 
-                # Titel erstellen
-                base_title = f"{icon}{rev} ({ort}) [{zert}] | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm{suffix}"
-                # Wenn Transport, dann Titel in Backticks (`) für grauen Hintergrund
+                # Titel grau machen wenn Transport
+                base_title = f"{icon}{rev} ({ort}) [{zert}] | Los {los} | 📦 {polter_sum:.2f} Fm{suffix}"
                 final_title = f"`{base_title}`" if is_trans else base_title
 
                 with st.expander(final_title):
@@ -334,7 +328,7 @@ with tab2:
                     
                     c_act, c_cnt = st.columns([1, 4])
                     with c_act:
-                        if not is_trans and st.button("🚀 An Fuhrmann übergeben", key=f"mt_{ut}"):
+                        if not is_trans and st.button("🚀 An Fuhrmann", key=f"mt_{ut}"):
                             move_to_transport(ut); st.rerun()
 
                     c1, c2 = st.columns([1, 1])
@@ -342,10 +336,9 @@ with tab2:
                     
                     match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                     edited_stems = pd.DataFrame()
-                    
                     with c2:
                         if not match.empty:
-                            st.markdown("**Stämme (Info editierbar)**")
+                            st.markdown("**Stämme (Info)**")
                             cols_show = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Info'] if c in match.columns]
                             edited_stems = st.data_editor(
                                 match[cols_show], 
@@ -355,8 +348,7 @@ with tab2:
                             )
                         else: st.caption("Keine Stämme.")
                     
-                    # ZENTRALER SPEICHER BUTTON
-                    if st.button("💾 Alles speichern (Notiz & Info)", key=f"sv_b_{ut}"):
+                    if st.button("💾 Alles speichern", key=f"sv_b_{ut}"):
                         apply_batch_updates(ut, new_note, pd.DataFrame(), edited_stems)
                         st.success("Gespeichert!"); st.rerun()
                     
@@ -380,7 +372,14 @@ with tab3:
             done = len(grp[grp['Geliefert'] == True]); total = len(grp)
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
             
-            with st.expander(f"🚛 {rev} | Los {los} | {done}/{total} Polter fertig"):
+            # Titel Grau + Haken wenn fertig
+            base_title = f"🚛 {rev} | Los {los} | {done}/{total} Polter fertig"
+            if done == total and total > 0:
+                final_title = f"`✅ {base_title}`"
+            else:
+                final_title = base_title
+            
+            with st.expander(final_title):
                 st.progress(done/total if total>0 else 0)
                 n_note = st.text_area("Notiz Fuhrmann:", value=note_val, key=f"note_t_{ut}")
 
@@ -411,7 +410,16 @@ with tab3:
                         )
                     else: st.caption("Keine Einzelstämme.")
 
-                # ZENTRALER SPEICHER BUTTON
+                # Karte
+                v_pts = []
+                for _, r in grp.iterrows():
+                    la, lo = parse_gps_for_map(r.get('Lat','')), parse_gps_for_map(r.get('Lon',''))
+                    if la > 0: v_pts.append({"lat": la, "lon": lo, "c": "gray" if r['Geliefert'] else "red"})
+                if v_pts:
+                    m = folium.Map([pd.DataFrame(v_pts).lat.mean(), pd.DataFrame(v_pts).lon.mean()], zoom_start=13)
+                    for p in v_pts: folium.Marker([p['lat'], p['lon']], icon=folium.Icon(color=p['c'], icon="truck", prefix='fa')).add_to(m)
+                    st_folium(m, width="100%", height=250, key=f"mp_t_{ut}")
+
                 if st.button("💾 Alles speichern (Notiz & Haken)", key=f"sv_t_{ut}"):
                     apply_batch_updates(ut, n_note, edited_p, edited_s)
                     st.success("Gespeichert!"); st.rerun()
