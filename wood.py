@@ -248,8 +248,17 @@ def convert_df_to_excel(df_p, df_s):
 
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
+    
+    # 1. Polter Status
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
+    
+    # 2. Stämme Status (NEU: Auch prüfen)
+    done_s = 0
+    if not group_stems.empty:
+        done_s = len(group_stems[group_stems['Geliefert'] == True])
+    
+    # Mengen Infos
     vol = group_polter['Menge_Fm'].sum()
     stamm_anzahl = 0
     if not group_stems.empty:
@@ -258,12 +267,16 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
 
     status_text = ""
     is_gray = False
+    
     if status == 'Transport':
+        # Wenn ALLE Polter fertig sind = Komplett
         if total_p > 0 and done_p == total_p:
             status_text = "✅ KOMPLETT ABGEFAHREN"; is_gray = True
-        elif done_p > 0:
-            status_text = f"⚠️ TEILWEISE ({done_p}/{total_p})"
-        else: status_text = "⏳ WARTET AUF ABFUHR"
+        # Wenn IRGENDWAS (Polter oder Stamm) fertig ist = Teilweise
+        elif done_p > 0 or done_s > 0:
+            status_text = f"⚠️ TEILWEISE ABGEFAHREN"
+        else: 
+            status_text = "⏳ WARTET AUF ABFUHR"
         icon = "🚛"
     else:
         status_text = "🌲 BESTAND"; icon = "🌲"
@@ -274,7 +287,6 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
     return f"`{base}`" if is_gray else base
 
 def show_files_section(file_paths, key_prefix):
-    """Anzeige für Dateien mit eindeutigem Key"""
     if not file_paths or not isinstance(file_paths, list): return
     st.markdown("**📄 Original-Belege:**")
     cols = st.columns(len(file_paths))
@@ -287,7 +299,7 @@ def show_files_section(file_paths, key_prefix):
                         label=f"⬇️ {file_name}",
                         data=f,
                         file_name=file_name,
-                        key=f"{key_prefix}_dl_{i}" # EINDEUTIGER KEY
+                        key=f"{key_prefix}_dl_{i}"
                     )
                 if path.lower().endswith(('.png', '.jpg', '.jpeg')):
                     st.image(path, width=150)
@@ -301,7 +313,6 @@ def get_species_group(holzart):
     return "So"
 
 def calculate_stats(df_p_all, df_s_all):
-    """Berechnet komplexe Statistiken inkl. Einzelstamm-Abhaken"""
     total_fm = df_p_all['Menge_Fm'].sum()
     fsc_mask = df_p_all['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
     fsc_fm = df_p_all[fsc_mask]['Menge_Fm'].sum()
