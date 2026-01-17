@@ -32,10 +32,13 @@ if 'messages' not in st.session_state:
 
 # --- HELFER ---
 def load_prompt():
+    """Lädt den Prompt aus der externen Datei oder nutzt Fallback"""
     try:
         if os.path.exists("system_prompt.txt"):
-            with open("system_prompt.txt", "r", encoding="utf-8") as f: return f.read()
-    except: pass
+            with open("system_prompt.txt", "r", encoding="utf-8") as f:
+                return f.read()
+    except:
+        pass
     return None 
 
 def to_float(val):
@@ -180,9 +183,9 @@ def save_to_json(data, source_files=None):
         wnr = s.get('wnr', '')
         if s.get('klammer'): wnr = f"{wnr} (K)"
         
-        # PROMPT MAPPING: g -> Gue_Kl, kl -> Dm_Kl
-        gue_kl = s.get('g', s.get('klasse', ''))
-        dm_kl = s.get('kl', '')
+        # MAPPING JSON -> DB
+        gue_kl = s.get('g', '')   # G = Güte
+        dm_kl = s.get('kl', '')   # KL = Klasse
 
         db['staemme'].append({
             "Datum_Upload": timestamp, "Los_Nr": los, "Revier": revier, "WNr": wnr,
@@ -426,7 +429,7 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            # MODELL UPDATE
+                            # MODELL UPDATE: Pro Preview
                             res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
@@ -457,7 +460,6 @@ with tab1:
         
         st.divider()
         stems = data.get('staemme', [])
-        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
@@ -560,8 +562,8 @@ with tab2:
                                     "Holzart": st.column_config.TextColumn("H", width="small"),
                                     "Laenge": st.column_config.TextColumn("L", width="small"),
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"),
-                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
+                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"),  # REIHENFOLGE GEÄNDERT
+                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
                                     "Info": st.column_config.TextColumn("Info", width="medium"),
                                     "WNr": st.column_config.TextColumn("WNr", width="small")
                                 }
@@ -631,8 +633,8 @@ with tab3:
                             column_config={
                                 "Holzart": st.column_config.TextColumn("H", width="small"),
                                 "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
-                                "Gue_Kl": st.column_config.TextColumn("G", width="small"),
-                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
+                                "Gue_Kl": st.column_config.TextColumn("G", width="small"), # REIHENFOLGE GEÄNDERT
+                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
                                 "Info": st.column_config.TextColumn("Info", width="medium"),
                                 "WNr": st.column_config.TextColumn("WNr", width="small")
