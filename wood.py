@@ -22,39 +22,46 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CSS: MOBILE OPTIMIERUNG (ULTRA KOMPAKT) ---
+# --- CSS: MOBILE OPTIMIERUNG (MAXIMAL KOMPAKT) ---
 st.markdown("""
     <style>
         /* NUR FÜR HANDYS (Bildschirm kleiner 600px) */
         @media only screen and (max-width: 600px) {
             
-            /* Zoom-Trick: Tabelle verkleinern (85%), Container verbreitern */
+            /* Zoom: Alles verkleinern (85%), Container verbreitern */
             div[data-testid="stDataEditor"] {
                 transform: scale(0.85);
                 transform-origin: top left;
                 width: 118% !important;
                 margin-bottom: -30px;
-                font-size: 12px !important;
+                font-size: 10px !important;
             }
 
-            /* Schriftarten extrem kompakt */
+            /* Schriftarten winzig */
             div[data-testid="stDataEditor"] td, 
             div[data-testid="stDataEditor"] th,
             div[data-testid="stDataEditor"] input {
                 font-size: 10px !important;
-                padding: 0px 1px !important; /* Kein Padding */
-                line-height: 1.8 !important; /* Zeilenhöhe anpassen */
+                padding: 0px 0px !important; /* KEIN PADDING */
+                line-height: 1.5 !important;
             }
 
-            /* Spaltenüberschriften klein */
+            /* Header extrem schmal zwingen */
             div[data-testid="stDataEditor"] th {
-                min-width: 20px !important;
+                min-width: 10px !important;
+                width: auto !important;
+            }
+            
+            /* Zellen extrem schmal zwingen */
+            div[data-testid="stDataEditor"] td {
+                min-width: 10px !important;
+                max-width: 200px !important; /* Verhindert unendliche Breite */
             }
 
-            /* Seitenränder minimieren */
+            /* Seitenränder weg */
             .block-container {
-                padding-left: 0.2rem !important;
-                padding-right: 0.2rem !important;
+                padding-left: 0.1rem !important;
+                padding-right: 0.1rem !important;
             }
         }
     </style>
@@ -448,8 +455,8 @@ with tab1:
                    - art: Holzart
                    - l: Länge
                    - d: Durchmesser
-                   - kl: Durchmesserklasse/Stärkeklasse (Suche Spalte 'KL' oder 'Stkl')
-                   - g: Güteklasse/Qualität (Suche Spalte 'G' oder 'Qualität')
+                   - kl: Durchmesserklasse (aus 'KL')
+                   - g: Güteklasse (aus 'G')
                    - fm: Festmeter
                    - klammer: true (wenn 'K' oder geklammert)
                 3. POLTER: nr, fm, lat, lon (GPS)."""
@@ -596,12 +603,13 @@ with tab2:
                                 match['Dm_Kl'].astype(str)
                             )
                             
+                            # WICHTIG: width=None für Display
                             edited_stems = st.data_editor(
                                 match[['Display', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
-                                    "Display": st.column_config.TextColumn("Stamm-Daten", width="small", disabled=True),
+                                    "Display": st.column_config.TextColumn("Stamm-Daten", width=None, disabled=True), 
                                     "Info": st.column_config.TextColumn("Info", width="small")
                                 }
                             )
@@ -676,11 +684,12 @@ with tab3:
                             match['Dm_Kl'].astype(str)
                         )
                         
+                        # WICHTIG: width=None für Display
                         edited_s = st.data_editor(
                             match[['Geliefert', 'Display', 'Info']],
                             column_config={
                                 "Geliefert": st.column_config.CheckboxColumn("✅", width="small"),
-                                "Display": st.column_config.TextColumn("Stamm-Daten", width="large", disabled=True),
+                                "Display": st.column_config.TextColumn("Stamm-Daten", width=None, disabled=True),
                                 "Info": st.column_config.TextColumn("Info", width="small")
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
