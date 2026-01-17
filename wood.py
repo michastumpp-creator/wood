@@ -179,10 +179,16 @@ def save_to_json(data, source_files=None):
     for s in data.get('staemme', []):
         wnr = s.get('wnr', '')
         if s.get('klammer'): wnr = f"{wnr} (K)"
+        
+        # PROMPT MAPPING: g -> Gue_Kl, kl -> Dm_Kl
+        gue_kl = s.get('g', s.get('klasse', '')) # Fallback auf alt
+        dm_kl = s.get('kl', '')
+
         db['staemme'].append({
             "Datum_Upload": timestamp, "Los_Nr": los, "Revier": revier, "WNr": wnr,
             "Holzart": s.get('art', ''), "Laenge": fmt(s.get('l')), "Durchmesser": fmt(s.get('d')),
-            "Gue_Kl": s.get('klasse', ''), # HIER: Güteklasse
+            "Gue_Kl": gue_kl,
+            "Dm_Kl": dm_kl, # NEU: Durchmesserklasse aus KL
             "Volumen_Fm": fmt(s.get('fm')),
             "Status": "Bestand", "Geliefert": False, "Info": ""
         })
@@ -233,8 +239,8 @@ def load_data_frames():
     df_s = pd.DataFrame(db['staemme'])
     if not df_s.empty:
         if 'Volumen_Fm' in df_s.columns: df_s['Volumen_Fm'] = df_s['Volumen_Fm'].apply(to_float)
-        # Default Werte sicherstellen
-        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', ''), ('Holzart', ''), ('Gue_Kl', '')]:
+        # NEUE FELDER SICHERSTELLEN
+        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', ''), ('Holzart', ''), ('Gue_Kl', ''), ('Dm_Kl', '')]:
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
 
@@ -253,7 +259,6 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
     
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
-    
     done_s = 0
     if not group_stems.empty:
         done_s = len(group_stems[group_stems['Geliefert'] == True])
@@ -400,10 +405,18 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
-                # PROMPT UPDATE: Güteklasse anfordern
-                prompt = load_prompt() or """Analysiere Holzliste. Extrahiere exakt:
+                # PROMPT UPDATE: G und KL erfassen
+                prompt = load_prompt() or """Analysiere Holzliste.
                 1. META: Gesamtmenge (dokument_summe), Stämme gezählt (dokument_anzahl_staemme), Revier Ort, Zertifikat.
-                2. STÄMME (Tabelle): wnr (Nummer), art (Holzart), l (Länge), d (Durchmesser), klasse (Güteklasse/Qualität), fm (Festmeter). Wenn 'K' oder Klammer -> klammer: true.
+                2. STÄMME (Tabelle): 
+                   - wnr: Stamm-Nummer
+                   - art: Holzart
+                   - l: Länge
+                   - d: Durchmesser
+                   - kl: Durchmesserklasse (aus Spalte 'KL' oder 'Stärkeklasse')
+                   - g: Güteklasse (aus Spalte 'G' oder 'Qualität')
+                   - fm: Festmeter
+                   - klammer: true (wenn 'K' oder geklammert)
                 3. POLTER: nr, fm, lat, lon (GPS)."""
                 
                 agg = {"meta": {}, "polter": [], "staemme": [], "sum": 0.0, "cnt": 0.0}
@@ -444,13 +457,11 @@ with tab1:
         
         st.divider()
         stems = data.get('staemme', [])
-        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Festmeter", f"{doc_sum:.2f} / {stamm_sum:.2f}", delta=round(stamm_sum-doc_sum, 2))
-        c2.metric("Stückzahl", f"{int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))} / {len(valid_stems)}", delta=len(valid_stems)-int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0))))
         c3.metric(f"Polter", len(data.get('polter', [])))
 
         with st.expander("PDF-Check"):
@@ -539,16 +550,17 @@ with tab2:
                     with c2:
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
-                            # MOBILE OPTIMIERUNG
+                            # MOBILE OPTIMIERUNG & NEUE SPALTEN
                             edited_stems = st.data_editor(
-                                match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Gue_Kl', 'Info']], 
+                                match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Dm_Kl', 'Gue_Kl', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
                                     "Holzart": st.column_config.TextColumn("H", width="small"),
                                     "Laenge": st.column_config.TextColumn("L", width="small"),
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Gue_Kl": st.column_config.TextColumn("Q", width="small"),
+                                    "Dm_Kl": st.column_config.TextColumn("Kl", width="small"), # NEU
+                                    "Gue_Kl": st.column_config.TextColumn("Q", width="small"), # NEU
                                     "Info": st.column_config.TextColumn("Info", width="medium"),
                                     "WNr": st.column_config.TextColumn("WNr", width="small")
                                 }
@@ -614,10 +626,11 @@ with tab3:
                     if not match.empty:
                         # MOBILE OPTIMIERUNG
                         edited_s = st.data_editor(
-                            match[['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info', 'Gue_Kl']],
+                            match[['WNr', 'Holzart', 'Volumen_Fm', 'Dm_Kl', 'Gue_Kl', 'Geliefert', 'Info']],
                             column_config={
                                 "Holzart": st.column_config.TextColumn("H", width="small"),
                                 "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
+                                "Dm_Kl": st.column_config.TextColumn("Kl", width="small"),
                                 "Gue_Kl": st.column_config.TextColumn("Q", width="small"),
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
                                 "Info": st.column_config.TextColumn("Info", width="medium"),
