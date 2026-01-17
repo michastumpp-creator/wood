@@ -34,7 +34,7 @@ st.markdown("""
                 transform-origin: top left;
                 width: 118% !important;
                 margin-bottom: -30px;
-                font-size: 10px !important;
+                font-size: 12px !important;
             }
 
             /* Schriftarten extrem kompakt */
