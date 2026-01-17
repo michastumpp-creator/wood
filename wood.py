@@ -31,7 +31,7 @@ def load_prompt():
         with open("system_prompt.txt", "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        return None # Fallback im Code behandeln
+        return None 
 
 # --- HELFER: INPUT VERSTEHEN ---
 def to_float(val):
@@ -113,41 +113,57 @@ def get_spreadsheet():
         st.error(f"Fehler: {e}")
         return None
 
+# --- TABELLEN-HEADER SICHERSTELLEN ---
+def ensure_header(worksheet, header_list):
+    """Prüft ob Header da sind, wenn nicht, schreibt er sie."""
+    try:
+        # Prüfen ob A1 leer ist
+        first_cell = worksheet.acell('A1').value
+        if not first_cell:
+            worksheet.append_row(header_list)
+            return True
+        
+        # Optional: Prüfen ob neue Spalten fehlen und ergänzen
+        existing_headers = worksheet.row_values(1)
+        missing_cols = [h for h in header_list if h not in existing_headers]
+        if missing_cols:
+            # Füge fehlende Spalten hinten an
+            worksheet.add_cols(len(missing_cols))
+            # Das ist etwas komplexer mit gspread, wir machen es einfach:
+            # Wir schreiben die fehlenden Header in die erste Zeile
+            start_col = len(existing_headers) + 1
+            for i, col_name in enumerate(missing_cols):
+                worksheet.update_cell(1, start_col + i, col_name)
+    except:
+        pass
+
 def save_to_sheets(data):
     sh = get_spreadsheet()
     if not sh: return False
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
+    if isinstance(data, list): data = {"polter": data, "meta": {}, "staemme": []}
+
     meta = data.get('meta', {})
     los = str(meta.get('los', 'Unbekannt'))
     revier = str(meta.get('revier', 'Unbekannt'))
     ort = str(meta.get('revier_ort', ''))
     zert = str(meta.get('zertifikat', ''))
     datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
+    soll_menge = str(meta.get('dokument_summe', 0)).replace('.', ',')
 
     def fmt(val): return str(val).replace(',', '.') if val is not None else ""
 
-    # 1. POLTER
-    ws_polter = None
+    # --- 1. POLTER ---
+    HEADER_POLTER = ["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat", "Soll_Menge_Dokument"]
+    
     try:
         ws_polter = sh.worksheet("Polter_Uebersicht")
     except:
-        try:
-            ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=15)
-            ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat", "Soll_Menge_Dokument"])
-        except: return False
-
-    try:
-        headers = ws_polter.row_values(1)
-        if "Ort" not in headers: ws_polter.update_cell(1, len(headers)+1, "Ort")
-        headers = ws_polter.row_values(1) 
-        if "Zertifikat" not in headers: ws_polter.update_cell(1, len(headers)+1, "Zertifikat")
-        headers = ws_polter.row_values(1) 
-        if "Soll_Menge_Dokument" not in headers: ws_polter.update_cell(1, len(headers)+1, "Soll_Menge_Dokument")
-    except: pass
-
-    soll_menge = fmt(meta.get('dokument_summe', 0))
+        ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=20)
+    
+    # Header prüfen/schreiben
+    ensure_header(ws_polter, HEADER_POLTER)
 
     polter_rows = []
     for p in data.get('polter', []):
@@ -165,17 +181,17 @@ def save_to_sheets(data):
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
-    # 2. STÄMME
+    # --- 2. STÄMME ---
+    HEADER_STAMM = ["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm"]
+    
     stems = data.get('staemme', [])
     if stems:
-        ws_stamm = None
         try:
             ws_stamm = sh.worksheet("Einzelstaemme")
         except:
-            try:
-                ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=10)
-                ws_stamm.append_row(["Datum_Upload", "Los_Nr", "Revier", "WNr", "Holzart", "Laenge", "Durchmesser", "Gue_Kl", "Volumen_Fm"])
-            except: return False
+            ws_stamm = sh.add_worksheet(title="Einzelstaemme", rows=1000, cols=15)
+        
+        ensure_header(ws_stamm, HEADER_STAMM)
 
         stamm_rows = []
         for s in stems:
@@ -199,6 +215,7 @@ def delete_entry(los, revier, datum_aufnahme):
         mask_p = (df_p['Los_Nr'].astype(str) == str(los)) & (df_p['Revier'].astype(str) == str(revier)) & (df_p['Datum_Aufnahme'].astype(str) == str(datum_aufnahme))
         df_p_clean = df_p[~mask_p]
         ws_p.clear()
+        # Header neu schreiben beim Löschen ist wichtig!
         ws_p.update([df_p_clean.columns.values.tolist()] + df_p_clean.values.tolist())
 
         try:
@@ -216,18 +233,41 @@ def delete_entry(los, revier, datum_aufnahme):
 def load_data_frames():
     sh = get_spreadsheet()
     if not sh: return pd.DataFrame(), pd.DataFrame()
+    
+    # POLTER LADEN (MIT HEADER SCHUTZ)
     try:
-        data_p = sh.worksheet("Polter_Uebersicht").get_all_records()
+        ws_p = sh.worksheet("Polter_Uebersicht")
+        data_p = ws_p.get_all_records()
         df_polter = pd.DataFrame(data_p)
-        if not df_polter.empty and 'Menge_Fm' in df_polter.columns:
+        
+        # Falls leer, erstelle Dummy mit richtigen Spalten
+        expected_cols = ["Menge_Fm", "Lat", "Lon", "Los_Nr", "Revier", "Datum_Aufnahme", "Ort", "Zertifikat"]
+        if df_polter.empty:
+            df_polter = pd.DataFrame(columns=expected_cols)
+        
+        # Typen konvertieren, falls Spalten existieren
+        if 'Menge_Fm' in df_polter.columns:
             df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(to_float)
-    except: df_polter = pd.DataFrame()
+            
+    except: 
+        df_polter = pd.DataFrame(columns=["Menge_Fm", "Los_Nr"]) # Notfall-Fallback
+
+    # STÄMME LADEN (MIT HEADER SCHUTZ)
     try:
-        data_s = sh.worksheet("Einzelstaemme").get_all_records()
+        ws_s = sh.worksheet("Einzelstaemme")
+        data_s = ws_s.get_all_records()
         df_staemme = pd.DataFrame(data_s)
-        if not df_staemme.empty and 'Volumen_Fm' in df_staemme.columns:
+        
+        expected_cols_s = ["Volumen_Fm", "Holzart", "Los_Nr", "WNr"]
+        if df_staemme.empty:
+            df_staemme = pd.DataFrame(columns=expected_cols_s)
+
+        if 'Volumen_Fm' in df_staemme.columns:
             df_staemme['Volumen_Fm'] = df_staemme['Volumen_Fm'].apply(to_float)
-    except: df_staemme = pd.DataFrame()
+            
+    except: 
+        df_staemme = pd.DataFrame(columns=["Volumen_Fm", "Holzart"]) # Notfall-Fallback
+        
     return df_polter, df_staemme
 
 # --- APP START ---
@@ -251,16 +291,13 @@ with tab1:
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
                 
-                # Prompt aus Datei laden
                 system_prompt_text = load_prompt()
-                
-                # Fallback Prompt, falls Datei fehlt
                 if not system_prompt_text:
                     system_prompt_text = """
-                    Du bist ein KI-Assistent für Forstwirtschaft. Analysiere das Dokument.
-                    1. METADATEN: "Gesamtmenge" (Fm), "Stämme gezählt", "Revier Ort" (nur Ort), "Zertifikat".
-                    2. EINZELSTÄMME: Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Wenn "K" -> klammer: true.
-                    3. POLTER & GPS: Polter-Listen mit GPS (Exakter String).
+                    Du bist ein KI-Assistent. Analysiere exakt.
+                    1. META: "Gesamtmenge", "Stämme gezählt", "Revier Ort", "Zertifikat".
+                    2. STÄMME: Tabelle lesen. "K" -> klammer: true.
+                    3. POLTER: GPS als String.
                     """
 
                 aggregated_data = {
@@ -318,9 +355,8 @@ with tab1:
                 
                 st.session_state.analyzed_data = aggregated_data
                 
-                # KI Check
                 check_prompt = f"""
-                Check der Gesamtdaten ({len(uploaded_files)} Dateien):
+                Check ({len(uploaded_files)} Dateien):
                 Daten: {json.dumps(aggregated_data)}
                 Stimmt die Summe der Stämme mit 'dokument_summe' ({aggregated_data['total_soll_summe']}) überein?
                 Antworte kurz.
@@ -371,7 +407,7 @@ with tab1:
         z_label = f"Polter ({zertifikat})" if zertifikat else "Polter"
         c3.metric(z_label, len(data.get('polter', [])))
 
-        with st.expander("📄 PDF-Check (Visuell)"):
+        with st.expander("📄 PDF-Check"):
             if uploaded_files:
                 file_tabs = st.tabs([f.name for f in uploaded_files])
                 for idx, tab in enumerate(file_tabs):
@@ -412,25 +448,22 @@ with tab2:
         c_stats, c_map = st.columns([1, 1]) 
         
         with c_stats:
-            # HIER WAR DER FEHLER: Wir prüfen jetzt zuerst die Spalten!
-            if not df_staemme.empty and 'Holzart' in df_staemme.columns and 'Volumen_Fm' in df_staemme.columns:
-                try:
-                    stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
-                    st.dataframe(stats, height=200, use_container_width=True)
-                    st.caption(f"**Gesamt: {stats.sum():.2f} Fm**")
-                except Exception as e:
-                    st.error(f"Fehler bei Statistik: {e}")
-            else:
-                st.info("Keine Stammdaten für Statistik verfügbar.")
+            # Jetzt ist es sicher: Holzart existiert oder DF ist leer
+            if not df_staemme.empty and 'Holzart' in df_staemme.columns:
+                stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
+                st.dataframe(stats, height=200, use_container_width=True)
+                st.caption(f"**Gesamt: {stats.sum():.2f} Fm**")
+            else: st.info("Leer")
 
         with c_map:
             all_pts = []
-            for _, row in df_polter.iterrows():
-                lat = parse_gps_for_map(row.get('Lat', ''))
-                lon = parse_gps_for_map(row.get('Lon', ''))
-                if lat > 0:
-                    info = f"{row.get('Ort','')} | Los {row['Los_Nr']}"
-                    all_pts.append({"lat": lat, "lon": lon, "info": info})
+            if 'Lat' in df_polter.columns:
+                for _, row in df_polter.iterrows():
+                    lat = parse_gps_for_map(row.get('Lat', ''))
+                    lon = parse_gps_for_map(row.get('Lon', ''))
+                    if lat > 0:
+                        info = f"{row.get('Ort','')} | Los {row['Los_Nr']}"
+                        all_pts.append({"lat": lat, "lon": lon, "info": info})
             
             if all_pts:
                 map_df = pd.DataFrame(all_pts)
@@ -460,12 +493,13 @@ with tab2:
                 
                 if not df_staemme.empty and 'Los_Nr' in df_staemme.columns:
                     match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
-                    if not match.empty and 'WNr' in match.columns and 'Holzart' in match.columns:
+                    if not match.empty and 'WNr' in match.columns:
                         non_k = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
                         stamm_anzahl = len(non_k)
-                        counts = non_k['Holzart'].value_counts().head(3)
-                        summary_parts = [f"{art}: {c}" for art, c in counts.items()]
-                        stem_summary = " | " + ", ".join(summary_parts)
+                        if 'Holzart' in match.columns:
+                            counts = non_k['Holzart'].value_counts().head(3)
+                            summary_parts = [f"{art}: {c}" for art, c in counts.items()]
+                            stem_summary = " | " + ", ".join(summary_parts)
 
                 title = f"🌲 {revier}{ort_label}{zert_label} | Los {los} | 📅 {datum} | 📦 {polter_sum:.2f} Fm | 🪵 {stamm_anzahl} Stk{stem_summary}"
                 
@@ -498,8 +532,8 @@ with tab2:
                     with c2:
                         if not match.empty:
                             st.markdown(f"**Einzelstämme**")
-                            # Sicherstellen dass Spalten da sind
-                            cols_to_show = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm'] if c in match.columns]
-                            st.dataframe(match[cols_to_show], hide_index=True)
+                            # Zeige nur relevante Spalten wenn da
+                            show_cols = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm'] if c in match.columns]
+                            st.dataframe(match[show_cols], hide_index=True)
                         else:
                             st.caption("Keine Stämme.")
