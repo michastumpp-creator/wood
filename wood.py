@@ -273,7 +273,8 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
     base = f"{icon} {status_text} | {revier} {ort_str} {zert_str} | Los {los} | 📅 {datum_auf} | 📦 {vol:.2f} Fm | 🪵 {stamm_anzahl} Stk"
     return f"`{base}`" if is_gray else base
 
-def show_files_section(file_paths):
+def show_files_section(file_paths, key_prefix):
+    """Anzeige für Dateien mit eindeutigem Key"""
     if not file_paths or not isinstance(file_paths, list): return
     st.markdown("**📄 Original-Belege:**")
     cols = st.columns(len(file_paths))
@@ -282,7 +283,12 @@ def show_files_section(file_paths):
             with cols[i]:
                 file_name = os.path.basename(path)
                 with open(path, "rb") as f:
-                    st.download_button(f"⬇️ {file_name}", f, file_name=file_name)
+                    st.download_button(
+                        label=f"⬇️ {file_name}",
+                        data=f,
+                        file_name=file_name,
+                        key=f"{key_prefix}_dl_{i}" # EINDEUTIGER KEY
+                    )
                 if path.lower().endswith(('.png', '.jpg', '.jpeg')):
                     st.image(path, width=150)
         else: st.warning(f"Datei fehlt: {path}")
@@ -296,43 +302,23 @@ def get_species_group(holzart):
 
 def calculate_stats(df_p_all, df_s_all):
     """Berechnet komplexe Statistiken inkl. Einzelstamm-Abhaken"""
-    
-    # 1. Gesamt Gekauft
     total_fm = df_p_all['Menge_Fm'].sum()
-    
-    # 2. FSC
     fsc_mask = df_p_all['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
     fsc_fm = df_p_all[fsc_mask]['Menge_Fm'].sum()
     
-    # 3. Done & Left Berechnung (Komplex wegen Einzelstämmen)
     done_fm = 0.0
-    
-    # Wir iterieren durch alle Uploads
     if 'Datum_Upload' in df_p_all.columns:
         uploads = df_p_all['Datum_Upload'].unique()
         for upload in uploads:
-            # Daten für diesen Upload
             p_upl = df_p_all[df_p_all['Datum_Upload'] == upload]
             s_upl = df_s_all[df_s_all['Datum_Upload'] == upload] if not df_s_all.empty else pd.DataFrame()
-            
-            # Polter Done Summe
             vol_p_done = p_upl[p_upl['Geliefert'] == True]['Menge_Fm'].sum()
-            
-            # Stämme Done Summe
             vol_s_done = 0.0
             if not s_upl.empty:
                 vol_s_done = s_upl[s_upl['Geliefert'] == True]['Volumen_Fm'].sum()
-            
-            # Logic: Wenn Stämme angehakt sind (>0), aber der Polter-Wert niedriger ist, 
-            # nehmen wir die Stämme (Teillieferung).
-            # Wenn Polter komplett abgehakt (vol_p_done), ist das meist der volle Wert.
-            # Wir nehmen das Maximum für die sicherste Schätzung.
             done_fm += max(vol_p_done, vol_s_done)
             
     remaining_fm = total_fm - done_fm
-    
-    # 4. Holzarten Aufteilung (für alle 3 Kategorien)
-    # Wir brauchen Hilfs-Dataframes für die Stämme
     
     stats = {
         "total": {"Bu": 0, "Es": 0, "So": 0},
@@ -343,38 +329,24 @@ def calculate_stats(df_p_all, df_s_all):
     
     if not df_s_all.empty:
         df_s_all['Gruppe'] = df_s_all['Holzart'].apply(get_species_group)
-        
-        # TOTAL
         grp_tot = df_s_all.groupby('Gruppe')['Volumen_Fm'].sum()
         for k in stats["total"]: stats["total"][k] = grp_tot.get(k, 0)
         
-        # DONE & LEFT
-        # Hier ist es schwierig exakt zu sein, wenn ganze Polter (ohne Stamm-Haken) geliefert sind.
-        # Wir machen eine Annäherung: Wir schauen uns NUR die Einzelstämme an.
-        # Wenn ein Polter "Geliefert" ist, setzen wir virtuell alle seine Stämme auf "Geliefert" für die Statistik.
-        
-        # Kopie für Berechnung
         df_calc = df_s_all.copy()
-        
-        # Wir holen uns die Uploads, wo Polter fertig sind
         done_uploads_polter_based = []
         if 'Datum_Upload' in df_p_all.columns:
             for upload in df_p_all['Datum_Upload'].unique():
                 p_upl = df_p_all[df_p_all['Datum_Upload'] == upload]
-                if p_upl['Geliefert'].all() and len(p_upl) > 0: # Wenn alle Polter der Liste fertig
+                if p_upl['Geliefert'].all() and len(p_upl) > 0:
                     done_uploads_polter_based.append(upload)
         
-        # Wir markieren Stämme als done, wenn sie explizit done sind ODER ihre Liste fertig ist
         df_calc['Is_Done'] = df_calc['Geliefert'] | df_calc['Datum_Upload'].isin(done_uploads_polter_based)
-        
         grp_done = df_calc[df_calc['Is_Done']].groupby('Gruppe')['Volumen_Fm'].sum()
         grp_left = df_calc[~df_calc['Is_Done']].groupby('Gruppe')['Volumen_Fm'].sum()
         
         for k in stats["done"]: stats["done"][k] = grp_done.get(k, 0)
         for k in stats["left"]: stats["left"][k] = grp_left.get(k, 0)
         
-        # FSC
-        # Stämme filtern, die zu FSC-Poltern gehören
         fsc_uploads = df_p_all[fsc_mask]['Datum_Upload'].unique() if 'Datum_Upload' in df_p_all.columns else []
         df_fsc = df_s_all[df_s_all['Datum_Upload'].isin(fsc_uploads)]
         grp_fsc = df_fsc.groupby('Gruppe')['Volumen_Fm'].sum()
@@ -497,12 +469,9 @@ with tab2:
     else:
         st.subheader("📊 Lager-Übersicht")
         
-        # BERECHNUNG
         tot, done, left, fsc, s = calculate_stats(df_p, df_s)
         
-        # ANZEIGE
         c1, c2, c3, c4 = st.columns(4)
-        
         c1.metric("🪵 Gekauft (Gesamt)", f"{tot:.2f} Fm")
         c1.caption(f"Bu: {s['total']['Bu']:.1f} | Es: {s['total']['Es']:.1f} | So: {s['total']['So']:.1f}")
         
@@ -541,22 +510,18 @@ with tab2:
                 final_title = get_list_title(ut, grp, match, rev, los, ort, zert, datum_auf)
 
                 with st.expander(final_title):
-                    show_files_section(belege)
+                    show_files_section(belege, f"belege_b_{ut}")
                     st.divider()
-                    
                     new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
-                    
                     c_act, c_cnt = st.columns([1, 4])
                     with c_act:
                         if not is_trans and st.button("🚀 An Fuhrmann", key=f"mt_{ut}"):
                             move_to_transport(ut); st.rerun()
-                        
                         maps_url = get_google_maps_route_url(grp)
                         if maps_url: st.link_button("🗺️ Route planen", maps_url)
 
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
-                    
                     edited_stems = pd.DataFrame()
                     with c2:
                         if not match.empty:
@@ -604,11 +569,9 @@ with tab3:
             
             with st.expander(final_title):
                 st.progress(done/total if total>0 else 0)
-                show_files_section(belege)
-                
+                show_files_section(belege, f"belege_t_{ut}")
                 maps_url = get_google_maps_route_url(grp)
                 if maps_url: st.link_button("🗺️ Route planen", maps_url)
-                
                 n_note = st.text_area("Notiz Fuhrmann:", value=note_val, key=f"note_t_{ut}")
 
                 c1, c2 = st.columns([1, 1])
