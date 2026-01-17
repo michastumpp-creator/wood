@@ -9,6 +9,7 @@ import fitz  # PyMuPDF
 import io
 import re
 import os
+import shutil  # WICHTIG: Für Datei-Kopien
 from google import genai
 from google.genai import types
 
@@ -16,9 +17,11 @@ from google.genai import types
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
 DB_FILE = "forst_daten.json"
 UPLOAD_DIR = "belege"
+BACKUP_DIR = "backups"  # Ordner für automatische Backups
 
-# Stelle sicher, dass der Ordner existiert
+# Ordner erstellen
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # --- SESSION STATE ---
 if 'analyzed_data' not in st.session_state:
@@ -61,7 +64,6 @@ def parse_gps_for_map(val):
     return 0.0
 
 def get_google_maps_route_url(group_df):
-    """Erstellt einen Google Maps Link mit Route über alle Polter"""
     coords = []
     for _, r in group_df.iterrows():
         lat = parse_gps_for_map(r.get('Lat', ''))
@@ -70,14 +72,9 @@ def get_google_maps_route_url(group_df):
             coords.append(f"{lat},{lon}")
     
     if not coords: return None
-    
-    # Letzter Punkt ist Ziel, alle anderen sind Waypoints
     dest = coords[-1]
     base_url = "https://www.google.com/maps/dir/?api=1"
-    
     if len(coords) > 1:
-        # Join mit Pipe symbol, aber URL encoded (%7C) ist sicherer, 
-        # aber Browser verstehen Pipe oft direkt. Wir nehmen Pipe.
         waypoints = "|".join(coords[:-1])
         return f"{base_url}&destination={dest}&waypoints={waypoints}"
     else:
@@ -113,6 +110,27 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
         images.append(Image.open(io.BytesIO(img_data)))
     return images
 
+# --- BACKUP FUNKTION ---
+def create_auto_backup():
+    """Erstellt eine Kopie der aktuellen DB vor Änderungen."""
+    if os.path.exists(DB_FILE):
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"auto_backup_{timestamp}.json"
+            backup_path = os.path.join(BACKUP_DIR, backup_name)
+            
+            # Kopie erstellen
+            shutil.copy2(DB_FILE, backup_path)
+            
+            # Aufräumen: Nur die letzten 50 Backups behalten
+            backups = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".json")])
+            while len(backups) > 50:
+                os.remove(backups[0]) # Ältestes löschen
+                backups.pop(0)
+                
+        except Exception as e:
+            print(f"Backup Fehler: {e}") # Nur Loggen, nicht User stören
+
 # --- LOKALE DATENBANK ---
 def load_db():
     if not os.path.exists(DB_FILE): return {"polter": [], "staemme": []}
@@ -121,6 +139,10 @@ def load_db():
     except Exception: return {"polter": [], "staemme": []}
 
 def save_db(db_data):
+    # 1. AUTOMATISCHES BACKUP VOR DEM SCHREIBEN
+    create_auto_backup()
+    
+    # 2. SPEICHERN
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(db_data, f, ensure_ascii=False, indent=4)
@@ -135,7 +157,6 @@ def save_to_json(data, source_files=None):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     file_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # DATEIEN SPEICHERN
     saved_file_paths = []
     if source_files:
         for idx, file_obj in enumerate(source_files):
@@ -222,8 +243,7 @@ def load_data_frames():
         if 'Menge_Fm' in df_p.columns: df_p['Menge_Fm'] = df_p['Menge_Fm'].apply(to_float)
         for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Notiz', '')]:
             if col not in df_p.columns: df_p[col] = val
-        if 'Belege' not in df_p.columns:
-            df_p['Belege'] = [[] for _ in range(len(df_p))]
+        if 'Belege' not in df_p.columns: df_p['Belege'] = [[] for _ in range(len(df_p))]
 
     df_s = pd.DataFrame(db['staemme'])
     if not df_s.empty:
@@ -433,18 +453,13 @@ with tab2:
                     
                     new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
                     
-                    # LINKER TEIL: BUTTONS
                     c_act, c_cnt = st.columns([1, 4])
                     with c_act:
                         if not is_trans and st.button("🚀 An Fuhrmann", key=f"mt_{ut}"):
                             move_to_transport(ut); st.rerun()
                         
-                        # GOOGLE MAPS BUTTON
                         maps_url = get_google_maps_route_url(grp)
-                        if maps_url:
-                            st.link_button("🗺️ Route planen", maps_url)
-                        else:
-                            st.caption("Keine GPS Daten")
+                        if maps_url: st.link_button("🗺️ Route planen", maps_url)
 
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
@@ -498,7 +513,6 @@ with tab3:
                 st.progress(done/total if total>0 else 0)
                 show_files_section(belege)
                 
-                # MAPS BUTTON
                 maps_url = get_google_maps_route_url(grp)
                 if maps_url: st.link_button("🗺️ Route planen", maps_url)
                 
