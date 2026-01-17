@@ -182,7 +182,8 @@ def save_to_json(data, source_files=None):
         db['staemme'].append({
             "Datum_Upload": timestamp, "Los_Nr": los, "Revier": revier, "WNr": wnr,
             "Holzart": s.get('art', ''), "Laenge": fmt(s.get('l')), "Durchmesser": fmt(s.get('d')),
-            "Gue_Kl": s.get('klasse', ''), "Volumen_Fm": fmt(s.get('fm')),
+            "Gue_Kl": s.get('klasse', ''), # HIER: Güteklasse
+            "Volumen_Fm": fmt(s.get('fm')),
             "Status": "Bestand", "Geliefert": False, "Info": ""
         })
     return save_db(db)
@@ -232,7 +233,8 @@ def load_data_frames():
     df_s = pd.DataFrame(db['staemme'])
     if not df_s.empty:
         if 'Volumen_Fm' in df_s.columns: df_s['Volumen_Fm'] = df_s['Volumen_Fm'].apply(to_float)
-        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', ''), ('Holzart', '')]:
+        # Default Werte sicherstellen
+        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', ''), ('Holzart', ''), ('Gue_Kl', '')]:
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
 
@@ -249,16 +251,13 @@ def convert_df_to_excel(df_p, df_s):
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
     
-    # 1. Polter Status
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
     
-    # 2. Stämme Status (NEU: Auch prüfen)
     done_s = 0
     if not group_stems.empty:
         done_s = len(group_stems[group_stems['Geliefert'] == True])
     
-    # Mengen Infos
     vol = group_polter['Menge_Fm'].sum()
     stamm_anzahl = 0
     if not group_stems.empty:
@@ -269,10 +268,8 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
     is_gray = False
     
     if status == 'Transport':
-        # Wenn ALLE Polter fertig sind = Komplett
         if total_p > 0 and done_p == total_p:
             status_text = "✅ KOMPLETT ABGEFAHREN"; is_gray = True
-        # Wenn IRGENDWAS (Polter oder Stamm) fertig ist = Teilweise
         elif done_p > 0 or done_s > 0:
             status_text = f"⚠️ TEILWEISE ABGEFAHREN"
         else: 
@@ -403,7 +400,12 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
-                prompt = load_prompt() or """Analysiere Holzliste: META(Gesamtmenge, Stämme gezählt, Revier Ort, Zertifikat), STÄMME(Tabelle), POLTER(GPS)."""
+                # PROMPT UPDATE: Güteklasse anfordern
+                prompt = load_prompt() or """Analysiere Holzliste. Extrahiere exakt:
+                1. META: Gesamtmenge (dokument_summe), Stämme gezählt (dokument_anzahl_staemme), Revier Ort, Zertifikat.
+                2. STÄMME (Tabelle): wnr (Nummer), art (Holzart), l (Länge), d (Durchmesser), klasse (Güteklasse/Qualität), fm (Festmeter). Wenn 'K' oder Klammer -> klammer: true.
+                3. POLTER: nr, fm, lat, lon (GPS)."""
+                
                 agg = {"meta": {}, "polter": [], "staemme": [], "sum": 0.0, "cnt": 0.0}
                 pbar = st.progress(0)
                 for i, uf in enumerate(uploaded_files):
@@ -537,12 +539,19 @@ with tab2:
                     with c2:
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
-                            cols_show = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Info'] if c in match.columns]
+                            # MOBILE OPTIMIERUNG
                             edited_stems = st.data_editor(
-                                match[cols_show], 
+                                match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Gue_Kl', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
-                                column_config={"Info": st.column_config.TextColumn("Info", width="small")}
+                                column_config={
+                                    "Holzart": st.column_config.TextColumn("H", width="small"),
+                                    "Laenge": st.column_config.TextColumn("L", width="small"),
+                                    "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
+                                    "Gue_Kl": st.column_config.TextColumn("Q", width="small"),
+                                    "Info": st.column_config.TextColumn("Info", width="medium"),
+                                    "WNr": st.column_config.TextColumn("WNr", width="small")
+                                }
                             )
                         else: st.caption("Keine Stämme.")
                     
@@ -593,19 +602,26 @@ with tab3:
                     st.markdown("### 1. Polter Abhaken")
                     edited_p = st.data_editor(
                         grp[['Polter_Nr', 'Menge_Fm', 'Geliefert']],
-                        column_config={"Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False)},
+                        column_config={
+                            "Menge_Fm": st.column_config.NumberColumn("Fm", width="small"),
+                            "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False)
+                        },
                         hide_index=True, key=f"ed_p_t_{ut}"
                     )
                 
                 with c2:
                     st.markdown("### 2. Einzelstämme")
                     if not match.empty:
-                        cols_s = [c for c in ['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info'] if c in match.columns]
+                        # MOBILE OPTIMIERUNG
                         edited_s = st.data_editor(
-                            match[cols_s],
+                            match[['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info', 'Gue_Kl']],
                             column_config={
-                                "Geliefert": st.column_config.CheckboxColumn("Geliefert", default=False),
-                                "Info": st.column_config.TextColumn("Info")
+                                "Holzart": st.column_config.TextColumn("H", width="small"),
+                                "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
+                                "Gue_Kl": st.column_config.TextColumn("Q", width="small"),
+                                "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
+                                "Info": st.column_config.TextColumn("Info", width="medium"),
+                                "WNr": st.column_config.TextColumn("WNr", width="small")
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
                         )
