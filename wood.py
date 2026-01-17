@@ -152,23 +152,32 @@ def move_to_transport(timestamp):
     return save_db(db)
 
 def update_db_from_editor(edited_df, timestamp, type="polter"):
+    """
+    Sichere Speicherfunktion: Prüft erst, ob Spalte existiert (vermeidet KeyError).
+    """
     db = load_db()
     changed = False
+    
     for index, row in edited_df.iterrows():
         if type == "polter":
             for p in db['polter']:
                 if p.get('Datum_Upload') == timestamp and str(p.get('Polter_Nr')) == str(row['Polter_Nr']):
-                    if p.get('Geliefert') != row['Geliefert']:
+                    # Sicherer Zugriff: Nur wenn Spalte im Editor war
+                    if 'Geliefert' in row and p.get('Geliefert') != row['Geliefert']:
                         p['Geliefert'] = row['Geliefert']; changed = True
                     break
+                    
         elif type == "staemme":
             for s in db['staemme']:
                 if s.get('Datum_Upload') == timestamp and str(s.get('WNr')) == str(row['WNr']):
-                    if s.get('Geliefert') != row['Geliefert']:
+                    # Sicherer Zugriff für Geliefert
+                    if 'Geliefert' in row and s.get('Geliefert') != row['Geliefert']:
                         s['Geliefert'] = row['Geliefert']; changed = True
-                    if s.get('Info') != row['Info']:
+                    # Sicherer Zugriff für Info
+                    if 'Info' in row and s.get('Info') != row['Info']:
                         s['Info'] = str(row['Info']); changed = True
                     break
+                    
     if changed: save_db(db)
 
 def update_global_note(timestamp, new_note):
@@ -310,8 +319,8 @@ with tab2:
                 note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
                 
                 with st.expander(f"{icon}{rev} | Los {los} | {grp['Menge_Fm'].sum():.2f} Fm{suffix}"):
-                    # NOTIZ FELD (Global für Liste)
-                    new_note = st.text_area("Notiz zur Liste:", value=note_val, key=f"note_b_{ut}", height=68)
+                    # NOTIZ FELD
+                    new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
                     if new_note != note_val: update_global_note(ut, new_note)
 
                     c_act, c_cnt = st.columns([1, 4])
@@ -326,6 +335,7 @@ with tab2:
                         match = df_s[df_s['Datum_Upload'] == ut].copy()
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
+                            # Editor für Info (Geliefert ist hier unsichtbar, erzeugt also keinen Fehler)
                             cols_show = ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Info']
                             edited_stems = st.data_editor(
                                 match[cols_show], 
@@ -355,7 +365,7 @@ with tab3:
                 st.progress(done/total if total>0 else 0)
                 
                 st.info(f"📋 **Notiz:** {note_val}")
-                n_note = st.text_area("Notiz Fuhrmann/Bearbeitung:", value=note_val, key=f"note_t_{ut}")
+                n_note = st.text_area("Update Notiz:", value=note_val, key=f"note_t_{ut}")
                 if n_note != note_val: update_global_note(ut, n_note); st.rerun()
 
                 c1, c2 = st.columns([1, 1])
@@ -369,9 +379,10 @@ with tab3:
                     update_db_from_editor(edit_p, ut, "polter")
                 
                 with c2:
-                    st.markdown("### 2. Einzelstämme Abhaken (Alternativ)")
+                    st.markdown("### 2. Einzelstämme")
                     match = df_s[df_s['Datum_Upload'] == ut].copy()
                     if not match.empty:
+                        # Hier ist 'Geliefert' sichtbar, also darf es geupdated werden
                         edit_s = st.data_editor(
                             match[['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info']],
                             column_config={
