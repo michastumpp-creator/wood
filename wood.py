@@ -22,23 +22,32 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CSS TWEAKS FÜR MOBIL (KOMPAKT) ---
+# --- CSS: MOBILE OPTIMIERUNG (EXTREM KOMPAKT) ---
 st.markdown("""
     <style>
-        /* Schriftgröße in Tabellen verkleinern */
-        div[data-testid="stDataEditor"] table, div[data-testid="stDataFrame"] table {
-            font-size: 0.8rem !important;
+        /* Schriftgröße in Tabellen drastisch verkleinern für Handy */
+        div[data-testid="stDataEditor"] {
+            font-size: 11px !important;
         }
-        /* Zellen-Abstände radikal verringern (Kein Freiraum) */
-        div[data-testid="stDataEditor"] th, div[data-testid="stDataEditor"] td {
-            padding-left: 2px !important;
-            padding-right: 2px !important;
-            padding-top: 4px !important;
-            padding-bottom: 4px !important;
+        /* Header extrem kompakt */
+        div[data-testid="stDataEditor"] th {
+            font-size: 11px !important;
+            padding: 2px !important;
+            min-width: 20px !important;
         }
-        /* Checkbox Spalten enger machen */
+        /* Zellen extrem kompakt */
+        div[data-testid="stDataEditor"] td {
+            font-size: 11px !important;
+            padding: 0px 2px !important;
+        }
+        /* Checkbox Spalte minimieren */
         div[data-testid="stDataEditor"] [data-testid="stCheckbox"] {
-            width: 20px !important;
+            width: 15px !important;
+        }
+        /* Mobil-Optimierung für Buttons */
+        .stButton button {
+            width: 100%;
+            padding: 0.25rem 0.5rem;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -477,7 +486,6 @@ with tab1:
         
         st.divider()
         stems = data.get('staemme', [])
-        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
