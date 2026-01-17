@@ -255,6 +255,7 @@ def convert_df_to_excel(df_p, df_s):
 
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
+    
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
     done_s = 0
@@ -305,6 +306,7 @@ def show_files_section(file_paths, key_prefix):
                     st.image(path, width=150)
         else: st.warning(f"Datei fehlt: {path}")
 
+# --- HOLZARTEN KLASSIFIZIERUNG ---
 def get_species_group(holzart):
     h = str(holzart).lower()
     if "bu" in h: return "Bu"
@@ -424,7 +426,8 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            res = client.models.generate_content(model="gemini-3-flash-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
+                            # MODELL UPDATE
+                            res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
                             else: 
@@ -449,11 +452,12 @@ with tab1:
         if u := st.chat_input("Frage..."):
             st.session_state.messages.append({"role": "user", "content": u}); st.chat_message("user").write(u)
             with st.spinner("..."):
-                r = client.models.generate_content(model="gemini-3-flash-preview", contents=f"Daten: {json.dumps(data)}\nFrage: {u}\nAntworte kurz.")
+                r = client.models.generate_content(model="gemini-3-pro-preview", contents=f"Daten: {json.dumps(data)}\nFrage: {u}\nAntworte kurz.")
                 st.session_state.messages.append({"role": "assistant", "content": r.text}); st.rerun()
         
         st.divider()
         stems = data.get('staemme', [])
+        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
@@ -549,15 +553,15 @@ with tab2:
                             st.markdown("**Stämme (Info editierbar)**")
                             # MOBILE OPTIMIERUNG & Header G / KL
                             edited_stems = st.data_editor(
-                                match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Dm_Kl', 'Gue_Kl', 'Info']], 
+                                match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Gue_Kl', 'Dm_Kl', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
                                     "Holzart": st.column_config.TextColumn("H", width="small"),
                                     "Laenge": st.column_config.TextColumn("L", width="small"),
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # KLASSE
-                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"), # GÜTE
+                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"),
+                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
                                     "Info": st.column_config.TextColumn("Info", width="medium"),
                                     "WNr": st.column_config.TextColumn("WNr", width="small")
                                 }
@@ -623,12 +627,12 @@ with tab3:
                     if not match.empty:
                         # MOBILE OPTIMIERUNG & Header G / KL
                         edited_s = st.data_editor(
-                            match[['WNr', 'Holzart', 'Volumen_Fm', 'Dm_Kl', 'Gue_Kl', 'Geliefert', 'Info']],
+                            match[['WNr', 'Holzart', 'Volumen_Fm', 'Gue_Kl', 'Dm_Kl', 'Geliefert', 'Info']],
                             column_config={
                                 "Holzart": st.column_config.TextColumn("H", width="small"),
                                 "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
-                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
                                 "Gue_Kl": st.column_config.TextColumn("G", width="small"),
+                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
                                 "Info": st.column_config.TextColumn("Info", width="medium"),
                                 "WNr": st.column_config.TextColumn("WNr", width="small")
