@@ -22,25 +22,46 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CSS: MOBILE LIST VIEW ---
+# --- CSS: MOBILE OPTIMIERUNG ---
 st.markdown("""
     <style>
-        /* Schriftgröße etwas kleiner */
-        div[data-testid="stDataEditor"] {
-            font-size: 12px !important;
-        }
-        /* Spaltenköpfe ausblenden oder minimieren */
-        div[data-testid="stDataEditor"] th {
-            font-size: 11px !important;
-        }
-        /* Checkbox etwas größer */
-        div[data-testid="stDataEditor"] [data-testid="stCheckbox"] {
-            transform: scale(1.2);
-        }
-        /* Seitenränder minimieren */
-        .block-container {
-            padding-left: 0.2rem !important;
-            padding-right: 0.2rem !important;
+        /* NUR FÜR HANDYS (Bildschirm kleiner 600px) */
+        @media only screen and (max-width: 600px) {
+            
+            /* Zoom-Trick: Tabelle verkleinern damit sie passt */
+            div[data-testid="stDataEditor"] {
+                transform: scale(0.85);
+                transform-origin: top left;
+                width: 118% !important;
+                margin-bottom: -30px;
+            }
+
+            /* Schriftarten extrem kompakt */
+            div[data-testid="stDataEditor"] div, 
+            div[data-testid="stDataEditor"] span,
+            div[data-testid="stDataEditor"] input,
+            div[data-testid="stDataEditor"] textarea {
+                font-size: 11px !important;
+                line-height: 1.1 !important;
+            }
+
+            /* Header */
+            div[data-testid="stDataEditor"] th {
+                font-size: 11px !important;
+                padding: 1px !important;
+            }
+            
+            /* Zellen */
+            div[data-testid="stDataEditor"] td {
+                padding-top: 0px !important;
+                padding-bottom: 0px !important;
+            }
+
+            /* Seitenränder minimieren */
+            .block-container {
+                padding-left: 0.2rem !important;
+                padding-right: 0.2rem !important;
+            }
         }
     </style>
 """, unsafe_allow_html=True)
@@ -277,7 +298,6 @@ def convert_df_to_excel(df_p, df_s):
 
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
-    
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
     done_s = 0
@@ -426,6 +446,7 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
+                # PROMPT: G und KL exakt
                 prompt = load_prompt() or """Analysiere Holzliste.
                 1. META: Gesamtmenge (dokument_summe), Stämme gezählt (dokument_anzahl_staemme), Revier Ort, Zertifikat.
                 2. STÄMME (Tabelle): 
@@ -447,6 +468,7 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
+                            # MODELL: Pro Preview
                             res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
@@ -571,7 +593,7 @@ with tab2:
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
                             
-                            # TRICK: "Display" Spalte für Mobile erstellen
+                            # MOBILE TRICK: ZUSAMMENFASSEN
                             match['Display'] = (
                                 "#" + match['WNr'].astype(str) + " " + 
                                 match['Holzart'].astype(str) + " " + 
@@ -581,25 +603,21 @@ with tab2:
                                 "KL:" + match['Dm_Kl'].astype(str)
                             )
                             
-                            # KOMPAKTE TABELLE
                             edited_stems = st.data_editor(
-                                match[['Geliefert', 'Display', 'Info']], 
+                                match[['Display', 'Info']], # KEIN GELIEFERT HIER
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
-                                    "Geliefert": st.column_config.CheckboxColumn("✅", width="small"),
                                     "Display": st.column_config.TextColumn("Stamm-Daten", width="large", disabled=True),
                                     "Info": st.column_config.TextColumn("Info", width="small")
                                 }
                             )
-                            # Rückschreiben der Info (Geliefert wird automatisch gemappt)
                             match['Info'] = edited_stems['Info']
-                            match['Geliefert'] = edited_stems['Geliefert']
                             
                         else: st.caption("Keine Stämme.")
                     
                     if st.button("💾 Alles speichern (Notiz & Info)", key=f"sv_b_{ut}"):
-                        apply_batch_updates(ut, new_note, pd.DataFrame(), match) # HIER MATCH ÜBERGEBEN
+                        apply_batch_updates(ut, new_note, pd.DataFrame(), match)
                         st.success("Gespeichert!"); st.rerun()
                     
                     st.divider()
@@ -655,7 +673,7 @@ with tab3:
                 with c2:
                     st.markdown("### 2. Einzelstämme")
                     if not match.empty:
-                        # TRICK: "Display" Spalte für Mobile erstellen
+                        # MOBILE TRICK AUCH HIER
                         match['Display'] = (
                             "#" + match['WNr'].astype(str) + " " + 
                             match['Holzart'].astype(str) + " " + 
@@ -674,7 +692,6 @@ with tab3:
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
                         )
-                        # Rückschreiben
                         match['Info'] = edited_s['Info']
                         match['Geliefert'] = edited_s['Geliefert']
                     else: st.caption("Keine Einzelstämme.")
@@ -689,7 +706,7 @@ with tab3:
                     st_folium(m, width="100%", height=250, key=f"mp_t_{ut}")
 
                 if st.button("💾 Alles speichern (Notiz & Haken)", key=f"sv_t_{ut}"):
-                    apply_batch_updates(ut, n_note, edited_p, match) # MATCH ÜBERGEBEN
+                    apply_batch_updates(ut, n_note, edited_p, match)
                     st.success("Gespeichert!"); st.rerun()
                 
                 if done == total and total > 0:
