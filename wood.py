@@ -299,7 +299,6 @@ def convert_df_to_excel(df_p, df_s):
 
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
-    
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
     done_s = 0
@@ -433,7 +432,7 @@ with st.sidebar:
 
 # --- APP START ---
 st.title("🌲 Forst-Verwaltung")
-tab1, tab2, tab3 = st.tabs(["📸 Scan & Analyse", "🗃️ Bestand", "🚛 Transport"])
+tab1, tab2, tab3, tab4 = st.tabs(["📸 Scan", "🗃️ Bestand", "🚛 Transport", "🗺️ Weltkarte"])
 
 # --- TAB 1: SCANNER ---
 with tab1:
@@ -603,7 +602,7 @@ with tab2:
                                 match['Dm_Kl'].astype(str)
                             )
                             
-                            # WICHTIG: width=None für Display
+                            # WICHTIG: width=None (Auto) und Info small
                             edited_stems = st.data_editor(
                                 match[['Display', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
@@ -717,3 +716,68 @@ with tab3:
                 st.divider()
                 if st.button("🗑️ Archivieren (Endgültig löschen)", key=f"arc_{ut}"):
                     delete_entry_by_timestamp(ut); st.rerun()
+
+# --- TAB 4: WELTKARTE ---
+with tab4:
+    if st.button("🔄", key="r_w"): st.cache_data.clear()
+    
+    # 1. DATEN LADEN
+    df_p, _ = load_data_frames()
+    
+    if df_p.empty:
+        st.info("Noch keine Polter in der Datenbank.")
+    else:
+        st.subheader("🗺️ Globale Übersicht (War Room)")
+        
+        # 2. FILTER: NUR OFFENE
+        show_only_pending = st.toggle("Nur offene Aufträge anzeigen (Rot)", value=False)
+        
+        if show_only_pending:
+            # Zeige nur Polter, die NICHT geliefert sind
+            df_map = df_p[df_p['Geliefert'] == False]
+        else:
+            df_map = df_p
+            
+        # 3. KARTE BAUEN
+        map_points = []
+        for _, row in df_map.iterrows():
+            lat = parse_gps_for_map(row.get('Lat', ''))
+            lon = parse_gps_for_map(row.get('Lon', ''))
+            
+            if lat > 0 and lon > 0:
+                # Status Farbe
+                is_done = row.get('Geliefert', False)
+                color = "green" if is_done else "red"
+                
+                # Popup Text
+                info_text = f"""
+                <b>Revier:</b> {row.get('Revier', '?')}<br>
+                <b>Los:</b> {row.get('Los_Nr', '?')}<br>
+                <b>Polter:</b> {row.get('Polter_Nr', '?')}<br>
+                <b>Menge:</b> {row.get('Menge_Fm', '?')} Fm
+                """
+                
+                map_points.append({
+                    "lat": lat, 
+                    "lon": lon, 
+                    "info": info_text, 
+                    "color": color
+                })
+        
+        if map_points:
+            # Mittelpunkt berechnen
+            avg_lat = pd.DataFrame(map_points)['lat'].mean()
+            avg_lon = pd.DataFrame(map_points)['lon'].mean()
+            
+            m = folium.Map([avg_lat, avg_lon], zoom_start=10)
+            
+            for p in map_points:
+                folium.Marker(
+                    [p['lat'], p['lon']], 
+                    popup=p['info'], 
+                    icon=folium.Icon(color=p['color'], icon="tree", prefix='fa')
+                ).add_to(m)
+            
+            st_folium(m, width="100%", height=500, key="global_map")
+        else:
+            st.warning("Keine GPS-Daten für die aktuelle Auswahl verfügbar.")
