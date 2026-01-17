@@ -316,15 +316,26 @@ with tab2:
             
             for (ut, rev, los), grp in groups:
                 is_trans = grp['Status'].iloc[0] == 'Transport'
-                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
+                polter_sum = grp['Menge_Fm'].sum()
+                ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
+                zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
+                datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
                 note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
+
+                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
                 
-                with st.expander(f"{icon}{rev} | Los {los} | {grp['Menge_Fm'].sum():.2f} Fm{suffix}"):
-                    # NOTIZ FELD
-                    new_note = st.text_area("Notiz (wird mit Button unten gespeichert):", value=note_val, key=f"note_b_{ut}", height=68)
+                # Titel erstellen
+                base_title = f"{icon}{rev} ({ort}) [{zert}] | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm{suffix}"
+                # Wenn Transport, dann Titel in Backticks (`) für grauen Hintergrund
+                final_title = f"`{base_title}`" if is_trans else base_title
+
+                with st.expander(final_title):
+                    new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
                     
-                    if not is_trans and st.button("🚀 An Fuhrmann übergeben", key=f"mt_{ut}"):
-                        move_to_transport(ut); st.rerun()
+                    c_act, c_cnt = st.columns([1, 4])
+                    with c_act:
+                        if not is_trans and st.button("🚀 An Fuhrmann übergeben", key=f"mt_{ut}"):
+                            move_to_transport(ut); st.rerun()
 
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
@@ -349,7 +360,7 @@ with tab2:
                         apply_batch_updates(ut, new_note, pd.DataFrame(), edited_stems)
                         st.success("Gespeichert!"); st.rerun()
                     
-                    st.divider() # ABSTAND ZUM LÖSCHEN
+                    st.divider()
                     if st.button("🗑️ Liste Löschen", key=f"dl_{ut}"):
                         delete_entry_by_timestamp(ut); st.rerun()
 
@@ -408,6 +419,6 @@ with tab3:
                 if done == total and total > 0:
                     st.success("✅ Auftrag erledigt!")
                 
-                st.divider() # ABSTAND
+                st.divider()
                 if st.button("🗑️ Archivieren (Endgültig löschen)", key=f"arc_{ut}"):
                     delete_entry_by_timestamp(ut); st.rerun()
