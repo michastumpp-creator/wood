@@ -151,19 +151,16 @@ def move_to_transport(timestamp):
         if s.get('Datum_Upload') == timestamp: s['Status'] = 'Transport'
     return save_db(db)
 
-# --- BATCH UPDATE FUNKTION (Speichert alles auf einmal) ---
+# --- BATCH UPDATE ---
 def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
-    """
-    Nimmt die bearbeiteten DataFrames und speichert alles in einem Rutsch.
-    """
     db = load_db()
     
-    # 1. Notiz Update
+    # Notiz Update
     for p in db['polter']:
         if p.get('Datum_Upload') == timestamp:
             p['Notiz'] = new_note
 
-    # 2. Polter Update (Geliefert Status)
+    # Polter Update
     if not polter_df.empty:
         for index, row in polter_df.iterrows():
             for p in db['polter']:
@@ -171,7 +168,7 @@ def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
                     if 'Geliefert' in row: p['Geliefert'] = row['Geliefert']
                     break
     
-    # 3. Stämme Update (Geliefert & Info)
+    # Stämme Update
     if not staemme_df.empty:
         for index, row in staemme_df.iterrows():
             for s in db['staemme']:
@@ -323,15 +320,11 @@ with tab2:
                 note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
                 
                 with st.expander(f"{icon}{rev} | Los {los} | {grp['Menge_Fm'].sum():.2f} Fm{suffix}"):
-                    # Eingabe-Widgets (KEIN AUTO-SAVE!)
-                    new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
+                    # NOTIZ FELD
+                    new_note = st.text_area("Notiz (wird mit Button unten gespeichert):", value=note_val, key=f"note_b_{ut}", height=68)
                     
-                    c_act, c_cnt = st.columns([1, 4])
-                    with c_act:
-                        if not is_trans and st.button("Start Transport", key=f"mt_{ut}"):
-                            move_to_transport(ut); st.rerun()
-                        if st.button("Löschen", key=f"dl_{ut}"):
-                            delete_entry_by_timestamp(ut); st.rerun()
+                    if not is_trans and st.button("🚀 An Fuhrmann übergeben", key=f"mt_{ut}"):
+                        move_to_transport(ut); st.rerun()
 
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
@@ -351,10 +344,14 @@ with tab2:
                             )
                         else: st.caption("Keine Stämme.")
                     
-                    # DER SPEICHER BUTTON
-                    if st.button("💾 Änderungen speichern", key=f"sv_b_{ut}"):
+                    # ZENTRALER SPEICHER BUTTON
+                    if st.button("💾 Alles speichern (Notiz & Info)", key=f"sv_b_{ut}"):
                         apply_batch_updates(ut, new_note, pd.DataFrame(), edited_stems)
                         st.success("Gespeichert!"); st.rerun()
+                    
+                    st.divider() # ABSTAND ZUM LÖSCHEN
+                    if st.button("🗑️ Liste Löschen", key=f"dl_{ut}"):
+                        delete_entry_by_timestamp(ut); st.rerun()
 
 # --- TAB 3: TRANSPORT ---
 with tab3:
@@ -374,7 +371,7 @@ with tab3:
             
             with st.expander(f"🚛 {rev} | Los {los} | {done}/{total} Polter fertig"):
                 st.progress(done/total if total>0 else 0)
-                n_note = st.text_area("Notiz:", value=note_val, key=f"note_t_{ut}")
+                n_note = st.text_area("Notiz Fuhrmann:", value=note_val, key=f"note_t_{ut}")
 
                 c1, c2 = st.columns([1, 1])
                 edited_p = pd.DataFrame()
@@ -392,7 +389,6 @@ with tab3:
                     st.markdown("### 2. Einzelstämme")
                     match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                     if not match.empty:
-                        # Spalten sicherstellen
                         cols_s = [c for c in ['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info'] if c in match.columns]
                         edited_s = st.data_editor(
                             match[cols_s],
@@ -404,15 +400,14 @@ with tab3:
                         )
                     else: st.caption("Keine Einzelstämme.")
 
-                # Karte anzeigen...
-                
-                # DER SPEICHER BUTTON
-                if st.button("💾 Änderungen speichern", key=f"sv_t_{ut}"):
+                # ZENTRALER SPEICHER BUTTON
+                if st.button("💾 Alles speichern (Notiz & Haken)", key=f"sv_t_{ut}"):
                     apply_batch_updates(ut, n_note, edited_p, edited_s)
-                    st.success("Gespeichert!")
-                    st.rerun()
+                    st.success("Gespeichert!"); st.rerun()
                 
                 if done == total and total > 0:
                     st.success("✅ Auftrag erledigt!")
-                    if st.button("Archivieren", key=f"arc_{ut}"):
-                        delete_entry_by_timestamp(ut); st.rerun()
+                
+                st.divider() # ABSTAND
+                if st.button("🗑️ Archivieren (Endgültig löschen)", key=f"arc_{ut}"):
+                    delete_entry_by_timestamp(ut); st.rerun()
