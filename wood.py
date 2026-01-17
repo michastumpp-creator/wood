@@ -601,7 +601,7 @@ with tab2:
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
-                                    "Display": st.column_config.TextColumn("Stamm-Daten", width="large", disabled=True),
+                                    "Display": st.column_config.TextColumn("Stamm-Daten", width="small", disabled=True),
                                     "Info": st.column_config.TextColumn("Info", width="small")
                                 }
                             )
