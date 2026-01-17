@@ -584,6 +584,7 @@ with tab2:
                             # MOBILE OPTIMIERUNG & Header G / KL
                             edited_stems = st.data_editor(
                                 match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Gue_Kl', 'Dm_Kl', 'Info']], 
+                                use_container_width=True,
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
