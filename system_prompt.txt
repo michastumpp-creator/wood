@@ -24,7 +24,7 @@ Waldnummern sind nie doppelt vergeben und stämme ohne waldnummer gibt es nicht.
                             POLTER & GPS:
                             Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
                             Falls Unstimmigkeiten (z. B. Summen passen nicht, fehlende Einträge), liste sie detailliert im "unstimmigkeiten"-Feld auf und schlage Korrekturen vor. Bei unstimmigkeit in der anzahl der stämme prüfen ob du acu die klammerstämme abgezogen hast
-                            sag mir gleich wieviel festmeter und anzahl stämme
+                            sag mir gleich wieviel festmeter und anzahl stämme es sind.
                             --- JSON STRUKTUR ---
                             {
                                 "meta": {
