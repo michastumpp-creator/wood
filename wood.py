@@ -269,18 +269,28 @@ with tab1:
 
                         try:
                             prompt = """
-                            Du bist ein KI-Assistent für Forstwirtschaft. Analysiere das Dokument exakt wie ein buchhalter. bei unstimmigkeiten prüfe nochmals.
+                            Du bist ein präziser KI-Assistent, spezialisiert auf Forstwirtschaft und Buchhaltung in der Holzverarbeitung. 
+                            Analysiere das bereitgestellte Dokument exakt und systematisch wie ein Buchhalter: 
+                            Überprüfe jede Angabe doppelt, notiere Unstimmigkeiten klar und prüfe bei Zweifeln nochmals durch Quervergleiche. 
+                            Basier deine Analyse ausschließlich auf dem Dokumentinhalt – mache keine externen Annahmen. 
+                            Denke schrittweise: Beschreibe zuerst deinen Ansatz, dann die Extraktion und schließlich Unstimmigkeiten..
                             
                             1. METADATEN:
                             - "Gesamtmenge" (Fm), "Stämme gezählt" (auf DIESER Seite/Datei).
                             - "Revier Ort": Suche die Adresse des Reviers. Extrahiere NUR den Ortsnamen neben der PLZ (z.B. "Inneringen").
                             - "Zertifikat": Suche nach "FSC", "PEFC".
                             - "Los", "Revier", "Datum".
+                            Falls Daten fehlen, markiere sie als "nicht gefunden" und erkläre warum.
                             
                             2. EINZELSTÄMME:
                             Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Spalten: WNr, Lä, DoR, FmoR.
-                            Wenn "K" Spalte/Markierung -> klammer: true. das sind klammerstämme. diese werden normal aufgenommen aber nicht in der stückzahl der stämme berücksichtigt.
-                            
+                            "wnr": Waldnummer (WNr).
+                           "laenge": Länge (Lä) in Metern.
+                            "durchmesser_ohne_rinde": Durchmesser ohne Rinde (DoR) in cm.
+                            "fm_ohne_rinde": Festmeter ohne Rinde (FmoR).
+                            "klammer": true, falls "K"-Spalte oder Markierung vorhanden (Klammerstämme: Werden in der Analyse aufgenommen, aber nicht in der Gesamtstückzahl der Stämme gezählt); sonst false.
+
+Achte auf Vollständigkeit: Überprüfe, dass keine Stammnummer vergessen oder doppelt erfasst wird. Vergleiche mit der Gesamtmenge aus Metadaten.
                             3. POLTER & GPS:
                             Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
                             
