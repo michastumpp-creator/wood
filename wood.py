@@ -313,14 +313,16 @@ with tab2:
             
             for (ut, rev, los), grp in groups:
                 is_trans = grp['Status'].iloc[0] == 'Transport'
-                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
-                note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
                 polter_sum = grp['Menge_Fm'].sum()
                 ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
                 zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
+                datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
+                note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
+
+                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
                 
-                # Titel grau machen wenn Transport
-                base_title = f"{icon}{rev} ({ort}) [{zert}] | Los {los} | 📦 {polter_sum:.2f} Fm{suffix}"
+                # Titel erstellen
+                base_title = f"{icon}{rev} ({ort}) [{zert}] | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm{suffix}"
                 final_title = f"`{base_title}`" if is_trans else base_title
 
                 with st.expander(final_title):
@@ -336,9 +338,10 @@ with tab2:
                     
                     match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                     edited_stems = pd.DataFrame()
+                    
                     with c2:
                         if not match.empty:
-                            st.markdown("**Stämme (Info)**")
+                            st.markdown("**Stämme (Info editierbar)**")
                             cols_show = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Info'] if c in match.columns]
                             edited_stems = st.data_editor(
                                 match[cols_show], 
@@ -348,7 +351,7 @@ with tab2:
                             )
                         else: st.caption("Keine Stämme.")
                     
-                    if st.button("💾 Alles speichern", key=f"sv_b_{ut}"):
+                    if st.button("💾 Alles speichern (Notiz & Info)", key=f"sv_b_{ut}"):
                         apply_batch_updates(ut, new_note, pd.DataFrame(), edited_stems)
                         st.success("Gespeichert!"); st.rerun()
                     
@@ -371,13 +374,19 @@ with tab3:
         for (ut, rev, los), grp in groups:
             done = len(grp[grp['Geliefert'] == True]); total = len(grp)
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
+            ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
             
-            # Titel Grau + Haken wenn fertig
-            base_title = f"🚛 {rev} | Los {los} | {done}/{total} Polter fertig"
-            if done == total and total > 0:
-                final_title = f"`✅ {base_title}`"
+            # Status Text Logik
+            if total > 0 and done == total:
+                status_txt = "✅ KOMPLETT ABGEFAHREN"
+            elif done > 0:
+                status_txt = "⚠️ TEILWEISE ABGEFAHREN"
             else:
-                final_title = base_title
+                status_txt = "⏳ WARTET AUF ABFUHR"
+
+            # Titel bauen
+            base_title = f"🚛 {rev} ({ort}) | Los {los} | {status_txt} ({done}/{total} Polter)"
+            final_title = f"`✅ {base_title}`" if (total > 0 and done == total) else base_title
             
             with st.expander(final_title):
                 st.progress(done/total if total>0 else 0)
