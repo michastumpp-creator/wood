@@ -9,7 +9,7 @@ import fitz  # PyMuPDF
 import io
 import re
 import os
-import shutil  # WICHTIG: Für Datei-Kopien
+import shutil
 from google import genai
 from google.genai import types
 
@@ -17,7 +17,7 @@ from google.genai import types
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
 DB_FILE = "forst_daten.json"
 UPLOAD_DIR = "belege"
-BACKUP_DIR = "backups"  # Ordner für automatische Backups
+BACKUP_DIR = "backups"
 
 # Ordner erstellen
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -112,24 +112,15 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
 
 # --- BACKUP FUNKTION ---
 def create_auto_backup():
-    """Erstellt eine Kopie der aktuellen DB vor Änderungen."""
     if os.path.exists(DB_FILE):
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_name = f"auto_backup_{timestamp}.json"
-            backup_path = os.path.join(BACKUP_DIR, backup_name)
-            
-            # Kopie erstellen
+            backup_path = os.path.join(BACKUP_DIR, f"auto_backup_{timestamp}.json")
             shutil.copy2(DB_FILE, backup_path)
-            
-            # Aufräumen: Nur die letzten 50 Backups behalten
             backups = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".json")])
             while len(backups) > 50:
-                os.remove(backups[0]) # Ältestes löschen
-                backups.pop(0)
-                
-        except Exception as e:
-            print(f"Backup Fehler: {e}") # Nur Loggen, nicht User stören
+                os.remove(backups[0]); backups.pop(0)
+        except Exception as e: print(f"Backup Fehler: {e}")
 
 # --- LOKALE DATENBANK ---
 def load_db():
@@ -139,10 +130,7 @@ def load_db():
     except Exception: return {"polter": [], "staemme": []}
 
 def save_db(db_data):
-    # 1. AUTOMATISCHES BACKUP VOR DEM SCHREIBEN
     create_auto_backup()
-    
-    # 2. SPEICHERN
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(db_data, f, ensure_ascii=False, indent=4)
@@ -165,11 +153,9 @@ def save_to_json(data, source_files=None):
                 filename = f"{file_ts}_{idx}.{ext}"
                 filepath = os.path.join(UPLOAD_DIR, filename)
                 file_obj.seek(0)
-                with open(filepath, "wb") as f:
-                    f.write(file_obj.getbuffer())
+                with open(filepath, "wb") as f: f.write(file_obj.getbuffer())
                 saved_file_paths.append(filepath)
-            except Exception as e:
-                st.error(f"Datei-Fehler: {e}")
+            except Exception as e: st.error(f"Datei-Fehler: {e}")
 
     meta = data.get('meta', {})
     los, revier = str(meta.get('los', 'Unbekannt')), str(meta.get('revier', 'Unbekannt'))
@@ -241,7 +227,7 @@ def load_data_frames():
     df_p = pd.DataFrame(db['polter'])
     if not df_p.empty:
         if 'Menge_Fm' in df_p.columns: df_p['Menge_Fm'] = df_p['Menge_Fm'].apply(to_float)
-        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Notiz', '')]:
+        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Notiz', ''), ('Zertifikat', '')]:
             if col not in df_p.columns: df_p[col] = val
         if 'Belege' not in df_p.columns: df_p['Belege'] = [[] for _ in range(len(df_p))]
 
@@ -301,8 +287,7 @@ def show_files_section(file_paths):
                     st.download_button(f"⬇️ {file_name}", f, file_name=file_name)
                 if path.lower().endswith(('.png', '.jpg', '.jpeg')):
                     st.image(path, width=150)
-        else:
-            st.warning(f"Datei fehlt: {path}")
+        else: st.warning(f"Datei fehlt: {path}")
 
 # --- SEITENLEISTE ---
 with st.sidebar:
@@ -418,11 +403,29 @@ with tab2:
     if df_p.empty: st.info("Leer.")
     else:
         st.subheader("📊 Lager")
+        
+        # --- NEUE KPI METRIKEN ---
+        total_fm = df_p['Menge_Fm'].sum()
+        done_fm = df_p[df_p['Geliefert'] == True]['Menge_Fm'].sum()
+        remaining_fm = total_fm - done_fm
+        
+        # FSC Berechnung (String Contains, Case Insensitive)
+        fsc_mask = df_p['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
+        fsc_fm = df_p[fsc_mask]['Menge_Fm'].sum()
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("🪵 Gekauft (Gesamt)", f"{total_fm:.2f} Fm")
+        c2.metric("🚛 Abgefahren", f"{done_fm:.2f} Fm")
+        c3.metric("🌲 Noch im Wald", f"{remaining_fm:.2f} Fm")
+        c4.metric("✅ Davon FSC", f"{fsc_fm:.2f} Fm")
+        
+        st.divider()
+        
         c_st, c_mp = st.columns([1, 1])
         with c_st:
             if not df_s.empty and 'Holzart' in df_s.columns:
                 stats = df_s.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
-                st.dataframe(stats, height=150, use_container_width=True); st.caption(f"Gesamt: {stats.sum():.2f} Fm")
+                st.dataframe(stats, height=150, use_container_width=True)
         with c_mp:
             pts = [{"lat": parse_gps_for_map(r['Lat']), "lon": parse_gps_for_map(r['Lon']), "info": f"Los {r['Los_Nr']}"} for _, r in df_p.iterrows() if parse_gps_for_map(r['Lat'])>0]
             if pts:
