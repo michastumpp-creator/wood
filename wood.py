@@ -22,32 +22,35 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CSS: MOBILE OPTIMIERUNG (EXTREM KOMPAKT) ---
+# --- CSS: MOBILE OPTIMIERUNG (ULTRA KOMPAKT) ---
 st.markdown("""
     <style>
-        /* Schriftgröße in Tabellen drastisch verkleinern für Handy */
+        /* Schriftgröße winzig für maximalen Platz */
         div[data-testid="stDataEditor"] {
-            font-size: 11px !important;
+            font-size: 10px !important;
         }
-        /* Header extrem kompakt */
+        /* Header extrem eng */
         div[data-testid="stDataEditor"] th {
-            font-size: 11px !important;
-            padding: 2px !important;
-            min-width: 20px !important;
+            font-size: 10px !important;
+            padding: 1px !important;
+            min-width: 15px !important; /* ZWINGT DIE SPALTEN ZUSAMMEN */
+            max-width: 40px !important;
         }
-        /* Zellen extrem kompakt */
+        /* Zellen extrem eng */
         div[data-testid="stDataEditor"] td {
-            font-size: 11px !important;
-            padding: 0px 2px !important;
+            font-size: 10px !important;
+            padding: 0px 1px !important;
+            min-width: 15px !important;
         }
         /* Checkbox Spalte minimieren */
         div[data-testid="stDataEditor"] [data-testid="stCheckbox"] {
-            width: 15px !important;
+            width: 12px !important;
+            margin: 0px !important;
         }
-        /* Mobil-Optimierung für Buttons */
-        .stButton button {
-            width: 100%;
-            padding: 0.25rem 0.5rem;
+        /* Ganze Tabelle breiter ziehen auf Handy */
+        .block-container {
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -433,7 +436,6 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
-                # PROMPT UPDATE: G und KL exakt
                 prompt = load_prompt() or """Analysiere Holzliste.
                 1. META: Gesamtmenge (dokument_summe), Stämme gezählt (dokument_anzahl_staemme), Revier Ort, Zertifikat.
                 2. STÄMME (Tabelle): 
@@ -588,10 +590,10 @@ with tab2:
                                     "Holzart": st.column_config.TextColumn("H", width="small"),
                                     "Laenge": st.column_config.TextColumn("L", width="small"),
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"),  # REIHENFOLGE GEÄNDERT
+                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"), # REIHENFOLGE GEÄNDERT
                                     "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
                                     "Info": st.column_config.TextColumn("Info", width="small"), # AUCH SMALL
-                                    "WNr": st.column_config.TextColumn("WNr", width="small")
+                                    "WNr": st.column_config.TextColumn("#", width="small")
                                 }
                             )
                         else: st.caption("Keine Stämme.")
@@ -663,7 +665,7 @@ with tab3:
                                 "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
                                 "Info": st.column_config.TextColumn("Info", width="small"), # AUCH SMALL
-                                "WNr": st.column_config.TextColumn("WNr", width="small")
+                                "WNr": st.column_config.TextColumn("#", width="small")
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
                         )
