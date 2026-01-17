@@ -269,7 +269,7 @@ with tab1:
 
                         try:
                             prompt = """
-                            Du bist ein KI-Assistent für Forstwirtschaft. Analysiere das Dokument exakt.
+                            Du bist ein KI-Assistent für Forstwirtschaft. Analysiere das Dokument exakt wie ein buchhalter. bei unstimmigkeiten prüfe nochmals.
                             
                             1. METADATEN:
                             - "Gesamtmenge" (Fm), "Stämme gezählt" (auf DIESER Seite/Datei).
@@ -279,7 +279,7 @@ with tab1:
                             
                             2. EINZELSTÄMME:
                             Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Spalten: WNr, Lä, DoR, FmoR.
-                            Wenn "K" Spalte/Markierung -> klammer: true.
+                            Wenn "K" Spalte/Markierung -> klammer: true. das sind klammerstämme. diese werden normal aufgenommen aber nicht in der stückzahl der stämme berücksichtigt.
                             
                             3. POLTER & GPS:
                             Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
