@@ -336,7 +336,7 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            res = client.models.generate_content(model="gemini-3-flash-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
+                            res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
                             else: 
