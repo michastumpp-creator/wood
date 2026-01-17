@@ -12,6 +12,7 @@ from datetime import datetime
 import fitz  # PyMuPDF
 import io
 import re
+import os
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
@@ -23,6 +24,15 @@ if 'last_upload_count' not in st.session_state:
     st.session_state.last_upload_count = 0
 if 'messages' not in st.session_state:
     st.session_state.messages = []
+
+# --- HELFER: PROMPT LADEN ---
+def load_prompt():
+    try:
+        with open("system_prompt.txt", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        st.error("❌ Fehler: Die Datei 'system_prompt.txt' fehlt!")
+        return None
 
 # --- HELFER: INPUT VERSTEHEN ---
 def to_float(val):
@@ -52,11 +62,10 @@ def parse_gps_for_map(val):
 
 # --- HELFER: PDF MARKIEREN ---
 def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter_liste):
-    # Da wir die Datei mehrfach lesen, müssen wir den Pointer resetten
     uploaded_file.seek(0)
     try:
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    except: return [] # Falls kein PDF (z.B. Bild)
+    except: return [] 
     
     images = []
     search_terms = []
@@ -112,7 +121,6 @@ def save_to_sheets(data):
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # Meta nehmen wir vom "Haupt"-Datensatz (Sammel-Objekt)
     meta = data.get('meta', {})
     los = str(meta.get('los', 'Unbekannt'))
     revier = str(meta.get('revier', 'Unbekannt'))
@@ -129,7 +137,7 @@ def save_to_sheets(data):
     except:
         try:
             ws_polter = sh.add_worksheet(title="Polter_Uebersicht", rows=100, cols=15)
-            ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat"])
+            ws_polter.append_row(["Datum_Upload", "Datum_Aufnahme", "Los_Nr", "Revier", "Polter_Nr", "Menge_Fm", "Lat", "Lon", "Maps_Link", "Ort", "Zertifikat", "Soll_Menge_Dokument"])
         except: return False
 
     try:
@@ -137,7 +145,12 @@ def save_to_sheets(data):
         if "Ort" not in headers: ws_polter.update_cell(1, len(headers)+1, "Ort")
         headers = ws_polter.row_values(1) 
         if "Zertifikat" not in headers: ws_polter.update_cell(1, len(headers)+1, "Zertifikat")
+        headers = ws_polter.row_values(1) 
+        if "Soll_Menge_Dokument" not in headers: ws_polter.update_cell(1, len(headers)+1, "Soll_Menge_Dokument")
     except: pass
+
+    # Soll Menge aus dem Dokument für die DB speichern
+    soll_menge = fmt(meta.get('dokument_summe', 0))
 
     polter_rows = []
     for p in data.get('polter', []):
@@ -151,7 +164,7 @@ def save_to_sheets(data):
         
         polter_rows.append([
             timestamp, datum_aufnahme, los, revier, p.get('nr'), 
-            fmt(p.get('fm')), lat_text, lon_text, link, ort, zert
+            fmt(p.get('fm')), lat_text, lon_text, link, ort, zert, soll_menge
         ])
     if polter_rows: ws_polter.append_rows(polter_rows, value_input_option='USER_ENTERED')
 
@@ -230,148 +243,106 @@ with tab1:
     try: client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
     except: st.stop()
 
-    # MULTI-FILE UPLOAD
     uploaded_files = st.file_uploader("Holzlisten hochladen (Mehrere möglich)", type=["pdf", "jpg", "png"], accept_multiple_files=True)
 
     if uploaded_files:
-        # Reset Logic wenn neue Dateien kommen
         if st.session_state.last_upload_count != len(uploaded_files):
             st.session_state.analyzed_data = None
-            st.session_state.messages = []
+            st.session_state.messages = [] 
             st.session_state.last_upload_count = len(uploaded_files)
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
                 
-                # Container für gesammelte Daten
-                aggregated_data = {
-                    "meta": {}, 
-                    "polter": [], 
-                    "staemme": [],
-                    # Wir speichern hier temporäre Summen für den Soll-Vergleich
-                    "total_soll_summe": 0.0,
-                    "total_soll_anzahl": 0.0
-                }
+                # Prompt aus Datei laden
+                system_prompt_text = load_prompt()
                 
-                progress_bar = st.progress(0)
-                
-                for idx, uploaded_file in enumerate(uploaded_files):
-                    with st.spinner(f"Analysiere Datei {idx+1}/{len(uploaded_files)}: {uploaded_file.name}..."):
-                        
-                        # Inhalt vorbereiten
-                        content = None
-                        uploaded_file.seek(0) # Sicherstellen, dass wir am Anfang sind
-                        if uploaded_file.type == "application/pdf":
-                            content = types.Part.from_bytes(data=uploaded_file.read(), mime_type="application/pdf")
-                        else:
-                            img = Image.open(uploaded_file)
-                            content = img
-
-                        try:
-                            prompt = """
-                            Du bist ein präziser KI-Assistent, spezialisiert auf Forstwirtschaft und Buchhaltung in der Holzverarbeitung. 
-                            Analysiere das bereitgestellte Dokument exakt und systematisch wie ein Buchhalter: 
-                            Überprüfe jede Angabe doppelt, notiere Unstimmigkeiten klar und prüfe bei Zweifeln nochmals durch Quervergleiche. 
-                            Basier deine Analyse ausschließlich auf dem Dokumentinhalt – mache keine externen Annahmen. 
-                            Denke schrittweise: Beschreibe zuerst deinen Ansatz, dann die Extraktion und schließlich Unstimmigkeiten..
-                            
-                             METADATEN:
-                            - "Gesamtmenge" (Fm), "Stämme gezählt" (auf DIESER Seite/Datei).
-                            - "Revier Ort": Suche die Adresse des Reviers. Extrahiere NUR den Ortsnamen neben der PLZ (z.B. "Inneringen").
-                            - "Zertifikat": Suche nach "FSC", "PEFC".
-                            - "Los", "Revier", "Datum".
-                            Falls Daten fehlen, markiere sie als "nicht gefunden" und erkläre warum.
-                            
-                             EINZELSTÄMME:
-                            Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Spalten: WNr, Lä, DoR, FmoR.
-                            "wnr": Waldnummer (WNr).
-                           "laenge": Länge (Lä) in Metern.
-                            "durchmesser_ohne_rinde": Durchmesser ohne Rinde (DoR) in cm.
-                            "fm_ohne_rinde": Festmeter ohne Rinde (FmoR).
-                            "klammer": true, falls "K"-Spalte oder Markierung vorhanden (Klammerstämme: Werden in der Analyse aufgenommen, aber nicht in der Gesamtstückzahl der Stämme gezählt); sonst false.
-
-Achte auf Vollständigkeit: Überprüfe, dass keine Stammnummer vergessen oder doppelt erfasst wird. Vergleiche mit der Gesamtmenge aus Metadaten.
-Waldnummern sind nie doppelt vergeben und stämme ohne waldnummer gibt es nicht.
-                            POLTER & GPS:
-                            Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
-                            Falls Unstimmigkeiten (z. B. Summen passen nicht, fehlende Einträge), liste sie detailliert im "unstimmigkeiten"-Feld auf und schlage Korrekturen vor.
-                            
-                            --- JSON STRUKTUR ---
-                            {
-                                "meta": {
-                                    "los": "String", "revier": "String", "revier_ort": "String", "zertifikat": "String",
-                                    "datum": "String", "dokument_summe": Float, "dokument_anzahl_staemme": Int
-                                },
-                                "polter": [{"nr": Int, "fm": Float, "lat": "String", "lon": "String"}],
-                                "staemme": [{"wnr": "String", "klammer": Boolean, "art": "String", "l": Float, "d": Float, "klasse": "String", "fm": Float}]
-                            }
-                            """
-                            response = client.models.generate_content(
-                                model="gemini-3-flash-preview", 
-                                contents=[prompt, content],
-                                config=types.GenerateContentConfig(response_mime_type="application/json")
-                            )
-                            clean = response.text.replace("```json", "").replace("```", "").strip()
-                            single_file_data = json.loads(clean)
-                            
-                            # DATEN ZUSAMMENFÜHREN
-                            
-                            # Meta: Wir nehmen die Meta-Daten vom ersten File, updaten aber Datum/Ort falls später besser gefunden
-                            if not aggregated_data["meta"]:
-                                aggregated_data["meta"] = single_file_data.get("meta", {})
-                            else:
-                                # Falls spätere Files bessere Infos haben (z.B. Zertifikat war auf Seite 1 nicht da)
-                                new_meta = single_file_data.get("meta", {})
-                                if not aggregated_data["meta"].get("zertifikat") and new_meta.get("zertifikat"):
-                                    aggregated_data["meta"]["zertifikat"] = new_meta["zertifikat"]
-                            
-                            # Summen addieren (für den Check)
-                            aggregated_data["total_soll_summe"] += to_float(single_file_data.get("meta", {}).get("dokument_summe", 0))
-                            aggregated_data["total_soll_anzahl"] += to_float(single_file_data.get("meta", {}).get("dokument_anzahl_staemme", 0))
-                            
-                            # Listen erweitern
-                            aggregated_data["polter"].extend(single_file_data.get("polter", []))
-                            aggregated_data["staemme"].extend(single_file_data.get("staemme", []))
-                            
-                        except Exception as e:
-                            st.error(f"Fehler bei Datei {uploaded_file.name}: {e}")
+                if system_prompt_text:
+                    aggregated_data = {
+                        "meta": {}, 
+                        "polter": [], 
+                        "staemme": [],
+                        "total_soll_summe": 0.0,
+                        "total_soll_anzahl": 0.0
+                    }
                     
-                    progress_bar.progress((idx + 1) / len(uploaded_files))
+                    progress_bar = st.progress(0)
+                    
+                    for idx, uploaded_file in enumerate(uploaded_files):
+                        with st.spinner(f"Lese Datei {idx+1}/{len(uploaded_files)}: {uploaded_file.name}..."):
+                            
+                            content = None
+                            uploaded_file.seek(0)
+                            if uploaded_file.type == "application/pdf":
+                                content = types.Part.from_bytes(data=uploaded_file.read(), mime_type="application/pdf")
+                            else:
+                                img = Image.open(uploaded_file)
+                                content = img
 
-                # Die berechneten Gesamtsummen in das Meta-Objekt schreiben, damit die Anzeige stimmt
-                aggregated_data["meta"]["dokument_summe"] = aggregated_data["total_soll_summe"]
-                aggregated_data["meta"]["dokument_anzahl_staemme"] = aggregated_data["total_soll_anzahl"]
-                
-                st.session_state.analyzed_data = aggregated_data
-                
-                # --- KI CHECK NACH DEM MERGE ---
-                check_prompt = f"""
-                Ich habe {len(uploaded_files)} Dateien analysiert und zusammengefügt.
-                Hier ist das Gesamtergebnis: {json.dumps(aggregated_data)}
-                
-                Prüfe kurz:
-                1. Passt die Summe der Einzelstämme zur addierten "dokument_summe" ({aggregated_data['total_soll_summe']})?
-                2. Gibt es Auffälligkeiten?
-                Antworte kurz und direkt.
-                """
-                try:
-                    check_resp = client.models.generate_content(model="gemini-3-flash-preview", contents=check_prompt)
-                    st.session_state.messages.append({"role": "assistant", "content": check_resp.text})
-                except: pass
-                
-                st.rerun()
+                            try:
+                                response = client.models.generate_content(
+                                    model="gemini-3-flash-preview", 
+                                    contents=[system_prompt_text, content],
+                                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                                )
+                                clean = response.text.replace("```json", "").replace("```", "").strip()
+                                single_file_data = json.loads(clean)
+                                
+                                # META
+                                if not aggregated_data["meta"]:
+                                    aggregated_data["meta"] = single_file_data.get("meta", {})
+                                else:
+                                    # Updates wenn nötig
+                                    new_meta = single_file_data.get("meta", {})
+                                    if not aggregated_data["meta"].get("zertifikat") and new_meta.get("zertifikat"):
+                                        aggregated_data["meta"]["zertifikat"] = new_meta["zertifikat"]
+                                    if not aggregated_data["meta"].get("revier_ort") and new_meta.get("revier_ort"):
+                                        aggregated_data["meta"]["revier_ort"] = new_meta["revier_ort"]
+                                
+                                # SUMMEN
+                                aggregated_data["total_soll_summe"] += to_float(single_file_data.get("meta", {}).get("dokument_summe", 0))
+                                aggregated_data["total_soll_anzahl"] += to_float(single_file_data.get("meta", {}).get("dokument_anzahl_staemme", 0))
+                                
+                                # LISTEN
+                                aggregated_data["polter"].extend(single_file_data.get("polter", []))
+                                aggregated_data["staemme"].extend(single_file_data.get("staemme", []))
+                                
+                            except Exception as e:
+                                st.error(f"Fehler bei {uploaded_file.name}: {e}")
+                        
+                        progress_bar.progress((idx + 1) / len(uploaded_files))
+
+                    # Finalisieren
+                    aggregated_data["meta"]["dokument_summe"] = aggregated_data["total_soll_summe"]
+                    aggregated_data["meta"]["dokument_anzahl_staemme"] = aggregated_data["total_soll_anzahl"]
+                    
+                    st.session_state.analyzed_data = aggregated_data
+                    
+                    # KI Check
+                    check_prompt = f"""
+                    Check der Gesamtdaten ({len(uploaded_files)} Dateien):
+                    Daten: {json.dumps(aggregated_data)}
+                    Stimmt die Summe der Stämme mit 'dokument_summe' ({aggregated_data['total_soll_summe']}) überein?
+                    Antworte kurz.
+                    """
+                    try:
+                        check_resp = client.models.generate_content(model="gemini-3-flash-preview", contents=check_prompt)
+                        st.session_state.messages.append({"role": "assistant", "content": check_resp.text})
+                    except: pass
+                    
+                    st.rerun()
 
     if st.session_state.analyzed_data:
         data = st.session_state.analyzed_data
         
-        # --- CHAT UI ---
+        # --- CHAT ---
         st.divider()
         st.subheader("💬 KI-Assistent")
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
         
-        if user_input := st.chat_input("Frage etwas zum Ergebnis..."):
+        if user_input := st.chat_input("Frage etwas..."):
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"): st.write(user_input)
             with st.spinner("..."):
@@ -380,16 +351,14 @@ Waldnummern sind nie doppelt vergeben und stämme ohne waldnummer gibt es nicht.
                 st.session_state.messages.append({"role": "assistant", "content": response.text})
                 st.rerun()
         
-        # --- DATA DISPLAY ---
+        # --- ANZEIGE ---
         st.divider()
         
         all_stems = data.get('staemme', [])
         valid_stems = [s for s in all_stems if not s.get('klammer', False)]
         
-        # Soll-Werte (wurden oben beim Scannen schon addiert)
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         doc_count = int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))
-        
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in all_stems]) 
         
         meta = data.get('meta', {})
@@ -402,31 +371,22 @@ Waldnummern sind nie doppelt vergeben und stämme ohne waldnummer gibt es nicht.
         z_label = f"Polter ({zertifikat})" if zertifikat else "Polter"
         c3.metric(z_label, len(data.get('polter', [])))
 
-        # --- VISUELLE PRÜFUNG (FÜR JEDE DATEI) ---
-        with st.expander("📄 PDF-Check (Visuell - Alle Dateien)"):
+        with st.expander("📄 PDF-Check (Visuell)"):
             if uploaded_files:
-                # Wir iterieren nochmal über die Files für die Anzeige
                 file_tabs = st.tabs([f.name for f in uploaded_files])
                 for idx, tab in enumerate(file_tabs):
                     with tab:
                         f = uploaded_files[idx]
                         if f.type == "application/pdf":
                             try:
-                                # Wir übergeben hier keine "Soll"-Werte pro Datei, da wir nur die Gesamtsumme im Data-Objekt haben.
-                                # Aber wir können die Koordinaten markieren, wenn wir wissen, welche zu welcher Datei gehören.
-                                # Vereinfachung: Wir suchen einfach alle gefundenen Koordinaten in allen PDFs.
                                 marked_images = create_highlighted_pdf_images(f, 0, 0, data.get('polter', []))
-                                
                                 if marked_images:
                                     cols = st.columns(len(marked_images))
                                     for i, img in enumerate(marked_images):
                                         with cols[i]: st.image(img, caption=f"Seite {i+1}", use_container_width=True)
-                                else:
-                                    st.info("Keine relevanten Markierungen auf den ersten Seiten gefunden.")
-                            except Exception as e:
-                                st.warning(f"Vorschau nicht möglich: {e}")
-                        else:
-                            st.image(f, width=300)
+                                else: st.info("Keine Markierungen.")
+                            except Exception as e: st.warning(f"Vorschau Fehler: {e}")
+                        else: st.image(f, width=300)
 
         with st.expander("Details Tabelle"):
             st.dataframe(pd.DataFrame(all_stems))
@@ -507,7 +467,7 @@ with tab2:
                 with st.expander(title):
                     col_del, col_info = st.columns([1, 4])
                     with col_del:
-                        if st.button(f"🗑️", key=f"del_{revier}_{los}_{datum}"):
+                        if st.button(f"🗑️", key=f"del_{revier}_{los}_{datum}", help="Liste löschen"):
                             with st.spinner("..."):
                                 if delete_entry(los, revier, datum):
                                     st.success("Weg!")
