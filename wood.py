@@ -15,7 +15,7 @@ from google.genai import types
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
 DB_FILE = "forst_daten.json"
-UPLOAD_DIR = "belege"  # Ordner für die Dateien
+UPLOAD_DIR = "belege"
 
 # Stelle sicher, dass der Ordner existiert
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -59,6 +59,29 @@ def parse_gps_for_map(val):
             return d + (m / 60.0) + (s / 3600.0)
         except: pass
     return 0.0
+
+def get_google_maps_route_url(group_df):
+    """Erstellt einen Google Maps Link mit Route über alle Polter"""
+    coords = []
+    for _, r in group_df.iterrows():
+        lat = parse_gps_for_map(r.get('Lat', ''))
+        lon = parse_gps_for_map(r.get('Lon', ''))
+        if lat > 0 and lon > 0:
+            coords.append(f"{lat},{lon}")
+    
+    if not coords: return None
+    
+    # Letzter Punkt ist Ziel, alle anderen sind Waypoints
+    dest = coords[-1]
+    base_url = "https://www.google.com/maps/dir/?api=1"
+    
+    if len(coords) > 1:
+        # Join mit Pipe symbol, aber URL encoded (%7C) ist sicherer, 
+        # aber Browser verstehen Pipe oft direkt. Wir nehmen Pipe.
+        waypoints = "|".join(coords[:-1])
+        return f"{base_url}&destination={dest}&waypoints={waypoints}"
+    else:
+        return f"{base_url}&destination={dest}"
 
 def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter_liste):
     uploaded_file.seek(0)
@@ -197,12 +220,8 @@ def load_data_frames():
     df_p = pd.DataFrame(db['polter'])
     if not df_p.empty:
         if 'Menge_Fm' in df_p.columns: df_p['Menge_Fm'] = df_p['Menge_Fm'].apply(to_float)
-        
-        # Standard-Werte setzen (Skalare)
         for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Notiz', '')]:
             if col not in df_p.columns: df_p[col] = val
-            
-        # Belege-Liste setzen (Spezialfall für Listen-Spalte)
         if 'Belege' not in df_p.columns:
             df_p['Belege'] = [[] for _ in range(len(df_p))]
 
@@ -414,10 +433,18 @@ with tab2:
                     
                     new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
                     
+                    # LINKER TEIL: BUTTONS
                     c_act, c_cnt = st.columns([1, 4])
                     with c_act:
                         if not is_trans and st.button("🚀 An Fuhrmann", key=f"mt_{ut}"):
                             move_to_transport(ut); st.rerun()
+                        
+                        # GOOGLE MAPS BUTTON
+                        maps_url = get_google_maps_route_url(grp)
+                        if maps_url:
+                            st.link_button("🗺️ Route planen", maps_url)
+                        else:
+                            st.caption("Keine GPS Daten")
 
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
@@ -470,6 +497,10 @@ with tab3:
             with st.expander(final_title):
                 st.progress(done/total if total>0 else 0)
                 show_files_section(belege)
+                
+                # MAPS BUTTON
+                maps_url = get_google_maps_route_url(grp)
+                if maps_url: st.link_button("🗺️ Route planen", maps_url)
                 
                 n_note = st.text_area("Notiz Fuhrmann:", value=note_val, key=f"note_t_{ut}")
 
