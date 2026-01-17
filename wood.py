@@ -154,18 +154,14 @@ def move_to_transport(timestamp):
 # --- BATCH UPDATE ---
 def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
     db = load_db()
-    
     for p in db['polter']:
-        if p.get('Datum_Upload') == timestamp:
-            p['Notiz'] = new_note
-
+        if p.get('Datum_Upload') == timestamp: p['Notiz'] = new_note
     if not polter_df.empty:
         for index, row in polter_df.iterrows():
             for p in db['polter']:
                 if p.get('Datum_Upload') == timestamp and str(p.get('Polter_Nr')) == str(row['Polter_Nr']):
                     if 'Geliefert' in row: p['Geliefert'] = row['Geliefert']
                     break
-    
     if not staemme_df.empty:
         for index, row in staemme_df.iterrows():
             for s in db['staemme']:
@@ -173,7 +169,6 @@ def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
                     if 'Geliefert' in row: s['Geliefert'] = row['Geliefert']
                     if 'Info' in row: s['Info'] = str(row['Info'])
                     break
-    
     return save_db(db)
 
 def load_data_frames():
@@ -189,6 +184,47 @@ def load_data_frames():
         for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', '')]:
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
+
+# --- GENERATE LIST TITLE (HELFER) ---
+def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
+    # Status Infos
+    status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
+    done_p = len(group_polter[group_polter['Geliefert'] == True])
+    total_p = len(group_polter)
+    
+    # Mengen Infos
+    vol = group_polter['Menge_Fm'].sum()
+    stamm_anzahl = 0
+    if not group_stems.empty:
+        # Nur echte Stämme zählen (ohne Klammer)
+        non_k = group_stems[~group_stems['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
+        stamm_anzahl = len(non_k)
+
+    # Status Text & Icon Logik
+    status_text = ""
+    is_gray = False
+    
+    if status == 'Transport':
+        if total_p > 0 and done_p == total_p:
+            status_text = "✅ KOMPLETT ABGEFAHREN"
+            is_gray = True
+        elif done_p > 0:
+            status_text = f"⚠️ TEILWEISE ({done_p}/{total_p})"
+        else:
+            status_text = "⏳ WARTET AUF ABFUHR"
+        icon = "🚛"
+    else:
+        status_text = "🌲 BESTAND"
+        icon = "🌲"
+
+    # String bauen
+    ort_str = f"({ort})" if ort else ""
+    zert_str = f"[{zert}]" if zert else ""
+    
+    base = f"{icon} {status_text} | {revier} {ort_str} {zert_str} | Los {los} | 📅 {datum_auf} | 📦 {vol:.2f} Fm | 🪵 {stamm_anzahl} Stk"
+    
+    if is_gray: return f"`{base}`"
+    return base
 
 # --- SEITENLEISTE ---
 with st.sidebar:
@@ -259,11 +295,13 @@ with tab1:
         
         st.divider()
         stems = data.get('staemme', [])
+        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Festmeter", f"{doc_sum:.2f} / {stamm_sum:.2f}", delta=round(stamm_sum-doc_sum, 2))
+        c2.metric("Stückzahl", f"{int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))} / {len(valid_stems)}", delta=len(valid_stems)-int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0))))
         c3.metric(f"Polter", len(data.get('polter', [])))
 
         with st.expander("PDF-Check"):
@@ -313,17 +351,17 @@ with tab2:
             
             for (ut, rev, los), grp in groups:
                 is_trans = grp['Status'].iloc[0] == 'Transport'
-                polter_sum = grp['Menge_Fm'].sum()
+                note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
+                
+                # Zugehörige Stämme
+                match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
+                
+                # Titel generieren
                 ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
                 zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
                 datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
-                note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
-
-                icon, suffix = ("🚛 ", " (BEIM FUHRMANN)") if is_trans else ("🌲 ", "")
                 
-                # Titel erstellen
-                base_title = f"{icon}{rev} ({ort}) [{zert}] | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm{suffix}"
-                final_title = f"`{base_title}`" if is_trans else base_title
+                final_title = get_list_title(ut, grp, match, rev, los, ort, zert, datum_auf)
 
                 with st.expander(final_title):
                     new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
@@ -336,9 +374,7 @@ with tab2:
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                     
-                    match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                     edited_stems = pd.DataFrame()
-                    
                     with c2:
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
@@ -374,19 +410,16 @@ with tab3:
         for (ut, rev, los), grp in groups:
             done = len(grp[grp['Geliefert'] == True]); total = len(grp)
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
-            ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
             
-            # Status Text Logik
-            if total > 0 and done == total:
-                status_txt = "✅ KOMPLETT ABGEFAHREN"
-            elif done > 0:
-                status_txt = "⚠️ TEILWEISE ABGEFAHREN"
-            else:
-                status_txt = "⏳ WARTET AUF ABFUHR"
+            # Zugehörige Stämme
+            match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
 
-            # Titel bauen
-            base_title = f"🚛 {rev} ({ort}) | Los {los} | {status_txt} ({done}/{total} Polter)"
-            final_title = f"`✅ {base_title}`" if (total > 0 and done == total) else base_title
+            # Titel generieren
+            ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
+            zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
+            datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
+            
+            final_title = get_list_title(ut, grp, match, rev, los, ort, zert, datum_auf)
             
             with st.expander(final_title):
                 st.progress(done/total if total>0 else 0)
@@ -406,7 +439,6 @@ with tab3:
                 
                 with c2:
                     st.markdown("### 2. Einzelstämme")
-                    match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                     if not match.empty:
                         cols_s = [c for c in ['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info'] if c in match.columns]
                         edited_s = st.data_editor(
