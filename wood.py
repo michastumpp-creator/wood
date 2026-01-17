@@ -291,6 +291,7 @@ with tab1:
                             "klammer": true, falls "K"-Spalte oder Markierung vorhanden (Klammerstämme: Werden in der Analyse aufgenommen, aber nicht in der Gesamtstückzahl der Stämme gezählt); sonst false.
 
 Achte auf Vollständigkeit: Überprüfe, dass keine Stammnummer vergessen oder doppelt erfasst wird. Vergleiche mit der Gesamtmenge aus Metadaten.
+Waldnummern sind nie doppelt vergeben und stämme ohne waldnummer gibt es nicht.
                             3. POLTER & GPS:
                             Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
                             
