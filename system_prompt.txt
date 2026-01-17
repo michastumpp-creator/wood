@@ -17,7 +17,7 @@
                            "laenge": Länge (Lä) in Metern.
                             "durchmesser_ohne_rinde": Durchmesser ohne Rinde (DoR) in cm.
                             "fm_ohne_rinde": Festmeter ohne Rinde (FmoR).
-                            "klammer": true, falls "K"-Spalte oder Markierung vorhanden (Klammerstämme: Werden in der Analyse aufgenommen, aber nicht in der Gesamtstückzahl der Stämme gezählt); sonst false.
+                            "klammer": true,  (Klammerstämme: Werden in der Analyse aufgenommen, aber nicht in der Gesamtstückzahl der Stämme gezählt); sonst false.
 Suche Spalte 'G' für Güte und 'KL'
 
 Achte auf Vollständigkeit: Überprüfe, dass keine Stammnummer vergessen oder doppelt erfasst wird. Vergleiche mit der Gesamtmenge aus Metadaten.
