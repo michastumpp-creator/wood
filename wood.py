@@ -22,45 +22,25 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CSS: MOBILE ZOOM & OPTIMIERUNG ---
+# --- CSS: MOBILE LIST VIEW ---
 st.markdown("""
     <style>
-        /* NUR FÜR HANDYS (Bildschirm kleiner 600px) */
-        @media only screen and (max-width: 600px) {
-            
-            /* Der Trick: Tabelle herauszoomen (auf 82% Größe), damit sie passt */
-            div[data-testid="stDataEditor"] {
-                transform: scale(0.82);
-                transform-origin: top left;
-                width: 122% !important; /* Container breiter machen zum Ausgleich */
-                margin-bottom: -40px; /* Leerraum unten entfernen */
-            }
-
-            /* Schriftarten extrem kompakt erzwingen */
-            div[data-testid="stDataEditor"] div, 
-            div[data-testid="stDataEditor"] span,
-            div[data-testid="stDataEditor"] input {
-                font-size: 10px !important;
-                line-height: 1.0 !important;
-            }
-
-            /* Spaltenköpfe */
-            div[data-testid="stDataEditor"] th {
-                font-size: 10px !important;
-                padding: 1px !important;
-            }
-            
-            /* Zeilenhöhe verringern */
-            div[data-testid="stDataEditor"] td {
-                padding-top: 0px !important;
-                padding-bottom: 0px !important;
-            }
-
-            /* Seitenränder minimieren */
-            .block-container {
-                padding-left: 0.2rem !important;
-                padding-right: 0.2rem !important;
-            }
+        /* Schriftgröße etwas kleiner */
+        div[data-testid="stDataEditor"] {
+            font-size: 12px !important;
+        }
+        /* Spaltenköpfe ausblenden oder minimieren */
+        div[data-testid="stDataEditor"] th {
+            font-size: 11px !important;
+        }
+        /* Checkbox etwas größer */
+        div[data-testid="stDataEditor"] [data-testid="stCheckbox"] {
+            transform: scale(1.2);
+        }
+        /* Seitenränder minimieren */
+        .block-container {
+            padding-left: 0.2rem !important;
+            padding-right: 0.2rem !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -453,8 +433,8 @@ with tab1:
                    - art: Holzart
                    - l: Länge
                    - d: Durchmesser
-                   - kl: Durchmesserklasse (aus 'KL')
-                   - g: Güteklasse (aus 'G')
+                   - kl: Durchmesserklasse/Stärkeklasse (Suche Spalte 'KL' oder 'Stkl')
+                   - g: Güteklasse/Qualität (Suche Spalte 'G' oder 'Qualität')
                    - fm: Festmeter
                    - klammer: true (wenn 'K' oder geklammert)
                 3. POLTER: nr, fm, lat, lon (GPS)."""
@@ -590,25 +570,36 @@ with tab2:
                     with c2:
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
-                            # MOBILE OPTIMIERUNG & Header G / KL
+                            
+                            # TRICK: "Display" Spalte für Mobile erstellen
+                            match['Display'] = (
+                                "#" + match['WNr'].astype(str) + " " + 
+                                match['Holzart'].astype(str) + " " + 
+                                match['Laenge'].astype(str) + "m/" + 
+                                match['Durchmesser'].astype(str) + "cm " + 
+                                "G:" + match['Gue_Kl'].astype(str) + " " + 
+                                "KL:" + match['Dm_Kl'].astype(str)
+                            )
+                            
+                            # KOMPAKTE TABELLE
                             edited_stems = st.data_editor(
-                                match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Gue_Kl', 'Dm_Kl', 'Info']], 
+                                match[['Geliefert', 'Display', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
-                                    "Holzart": st.column_config.TextColumn("H", width="small"),
-                                    "Laenge": st.column_config.TextColumn("L", width="small"),
-                                    "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"),
-                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
-                                    "Info": st.column_config.TextColumn("Info", width="small"),
-                                    "WNr": st.column_config.TextColumn("#", width="small")
+                                    "Geliefert": st.column_config.CheckboxColumn("✅", width="small"),
+                                    "Display": st.column_config.TextColumn("Stamm-Daten", width="large", disabled=True),
+                                    "Info": st.column_config.TextColumn("Info", width="small")
                                 }
                             )
+                            # Rückschreiben der Info (Geliefert wird automatisch gemappt)
+                            match['Info'] = edited_stems['Info']
+                            match['Geliefert'] = edited_stems['Geliefert']
+                            
                         else: st.caption("Keine Stämme.")
                     
                     if st.button("💾 Alles speichern (Notiz & Info)", key=f"sv_b_{ut}"):
-                        apply_batch_updates(ut, new_note, pd.DataFrame(), edited_stems)
+                        apply_batch_updates(ut, new_note, pd.DataFrame(), match) # HIER MATCH ÜBERGEBEN
                         st.success("Gespeichert!"); st.rerun()
                     
                     st.divider()
@@ -664,20 +655,28 @@ with tab3:
                 with c2:
                     st.markdown("### 2. Einzelstämme")
                     if not match.empty:
-                        # MOBILE OPTIMIERUNG & Header G / KL
+                        # TRICK: "Display" Spalte für Mobile erstellen
+                        match['Display'] = (
+                            "#" + match['WNr'].astype(str) + " " + 
+                            match['Holzart'].astype(str) + " " + 
+                            match['Laenge'].astype(str) + "m/" + 
+                            match['Durchmesser'].astype(str) + "cm " + 
+                            "G:" + match['Gue_Kl'].astype(str) + " " + 
+                            "KL:" + match['Dm_Kl'].astype(str)
+                        )
+                        
                         edited_s = st.data_editor(
-                            match[['WNr', 'Holzart', 'Volumen_Fm', 'Gue_Kl', 'Dm_Kl', 'Geliefert', 'Info']],
+                            match[['Geliefert', 'Display', 'Info']],
                             column_config={
-                                "Holzart": st.column_config.TextColumn("H", width="small"),
-                                "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
-                                "Gue_Kl": st.column_config.TextColumn("G", width="small"),
-                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
-                                "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
-                                "Info": st.column_config.TextColumn("Info", width="small"),
-                                "WNr": st.column_config.TextColumn("#", width="small")
+                                "Geliefert": st.column_config.CheckboxColumn("✅", width="small"),
+                                "Display": st.column_config.TextColumn("Stamm-Daten", width="large", disabled=True),
+                                "Info": st.column_config.TextColumn("Info", width="small")
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
                         )
+                        # Rückschreiben
+                        match['Info'] = edited_s['Info']
+                        match['Geliefert'] = edited_s['Geliefert']
                     else: st.caption("Keine Einzelstämme.")
 
                 v_pts = []
@@ -690,7 +689,7 @@ with tab3:
                     st_folium(m, width="100%", height=250, key=f"mp_t_{ut}")
 
                 if st.button("💾 Alles speichern (Notiz & Haken)", key=f"sv_t_{ut}"):
-                    apply_batch_updates(ut, n_note, edited_p, edited_s)
+                    apply_batch_updates(ut, n_note, edited_p, match) # MATCH ÜBERGEBEN
                     st.success("Gespeichert!"); st.rerun()
                 
                 if done == total and total > 0:
