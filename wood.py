@@ -290,15 +290,97 @@ def show_files_section(file_paths):
 # --- HOLZARTEN KLASSIFIZIERUNG ---
 def get_species_group(holzart):
     h = str(holzart).lower()
-    if "bu" in h: return "Buche"
-    if "es" in h: return "Esche"
-    return "Sonstige"
+    if "bu" in h: return "Bu"
+    if "es" in h: return "Es"
+    return "So"
 
-def get_species_stats(df_subset):
-    if df_subset.empty: return 0, 0, 0
-    df_subset['Gruppe'] = df_subset['Holzart'].apply(get_species_group)
-    grp = df_subset.groupby('Gruppe')['Volumen_Fm'].sum()
-    return grp.get('Buche', 0), grp.get('Esche', 0), grp.get('Sonstige', 0)
+def calculate_stats(df_p_all, df_s_all):
+    """Berechnet komplexe Statistiken inkl. Einzelstamm-Abhaken"""
+    
+    # 1. Gesamt Gekauft
+    total_fm = df_p_all['Menge_Fm'].sum()
+    
+    # 2. FSC
+    fsc_mask = df_p_all['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
+    fsc_fm = df_p_all[fsc_mask]['Menge_Fm'].sum()
+    
+    # 3. Done & Left Berechnung (Komplex wegen Einzelstämmen)
+    done_fm = 0.0
+    
+    # Wir iterieren durch alle Uploads
+    if 'Datum_Upload' in df_p_all.columns:
+        uploads = df_p_all['Datum_Upload'].unique()
+        for upload in uploads:
+            # Daten für diesen Upload
+            p_upl = df_p_all[df_p_all['Datum_Upload'] == upload]
+            s_upl = df_s_all[df_s_all['Datum_Upload'] == upload] if not df_s_all.empty else pd.DataFrame()
+            
+            # Polter Done Summe
+            vol_p_done = p_upl[p_upl['Geliefert'] == True]['Menge_Fm'].sum()
+            
+            # Stämme Done Summe
+            vol_s_done = 0.0
+            if not s_upl.empty:
+                vol_s_done = s_upl[s_upl['Geliefert'] == True]['Volumen_Fm'].sum()
+            
+            # Logic: Wenn Stämme angehakt sind (>0), aber der Polter-Wert niedriger ist, 
+            # nehmen wir die Stämme (Teillieferung).
+            # Wenn Polter komplett abgehakt (vol_p_done), ist das meist der volle Wert.
+            # Wir nehmen das Maximum für die sicherste Schätzung.
+            done_fm += max(vol_p_done, vol_s_done)
+            
+    remaining_fm = total_fm - done_fm
+    
+    # 4. Holzarten Aufteilung (für alle 3 Kategorien)
+    # Wir brauchen Hilfs-Dataframes für die Stämme
+    
+    stats = {
+        "total": {"Bu": 0, "Es": 0, "So": 0},
+        "done": {"Bu": 0, "Es": 0, "So": 0},
+        "left": {"Bu": 0, "Es": 0, "So": 0},
+        "fsc": {"Bu": 0, "Es": 0, "So": 0}
+    }
+    
+    if not df_s_all.empty:
+        df_s_all['Gruppe'] = df_s_all['Holzart'].apply(get_species_group)
+        
+        # TOTAL
+        grp_tot = df_s_all.groupby('Gruppe')['Volumen_Fm'].sum()
+        for k in stats["total"]: stats["total"][k] = grp_tot.get(k, 0)
+        
+        # DONE & LEFT
+        # Hier ist es schwierig exakt zu sein, wenn ganze Polter (ohne Stamm-Haken) geliefert sind.
+        # Wir machen eine Annäherung: Wir schauen uns NUR die Einzelstämme an.
+        # Wenn ein Polter "Geliefert" ist, setzen wir virtuell alle seine Stämme auf "Geliefert" für die Statistik.
+        
+        # Kopie für Berechnung
+        df_calc = df_s_all.copy()
+        
+        # Wir holen uns die Uploads, wo Polter fertig sind
+        done_uploads_polter_based = []
+        if 'Datum_Upload' in df_p_all.columns:
+            for upload in df_p_all['Datum_Upload'].unique():
+                p_upl = df_p_all[df_p_all['Datum_Upload'] == upload]
+                if p_upl['Geliefert'].all() and len(p_upl) > 0: # Wenn alle Polter der Liste fertig
+                    done_uploads_polter_based.append(upload)
+        
+        # Wir markieren Stämme als done, wenn sie explizit done sind ODER ihre Liste fertig ist
+        df_calc['Is_Done'] = df_calc['Geliefert'] | df_calc['Datum_Upload'].isin(done_uploads_polter_based)
+        
+        grp_done = df_calc[df_calc['Is_Done']].groupby('Gruppe')['Volumen_Fm'].sum()
+        grp_left = df_calc[~df_calc['Is_Done']].groupby('Gruppe')['Volumen_Fm'].sum()
+        
+        for k in stats["done"]: stats["done"][k] = grp_done.get(k, 0)
+        for k in stats["left"]: stats["left"][k] = grp_left.get(k, 0)
+        
+        # FSC
+        # Stämme filtern, die zu FSC-Poltern gehören
+        fsc_uploads = df_p_all[fsc_mask]['Datum_Upload'].unique() if 'Datum_Upload' in df_p_all.columns else []
+        df_fsc = df_s_all[df_s_all['Datum_Upload'].isin(fsc_uploads)]
+        grp_fsc = df_fsc.groupby('Gruppe')['Volumen_Fm'].sum()
+        for k in stats["fsc"]: stats["fsc"][k] = grp_fsc.get(k, 0)
+
+    return total_fm, done_fm, remaining_fm, fsc_fm, stats
 
 # --- SEITENLEISTE ---
 with st.sidebar:
@@ -415,51 +497,26 @@ with tab2:
     else:
         st.subheader("📊 Lager-Übersicht")
         
-        # --- DATEN-AGGREGATION ---
-        total_fm = df_p['Menge_Fm'].sum()
-        done_fm = df_p[df_p['Geliefert'] == True]['Menge_Fm'].sum()
-        remaining_fm = total_fm - done_fm
-        fsc_mask = df_p['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
-        fsc_fm = df_p[fsc_mask]['Menge_Fm'].sum()
+        # BERECHNUNG
+        tot, done, left, fsc, s = calculate_stats(df_p, df_s)
         
-        # Holzarten-Aufschlüsselung (basierend auf Einzelstämmen für Präzision)
-        if not df_s.empty:
-            df_s_done = df_s[df_s['Geliefert'] == True].copy()
-            df_s_left = df_s[df_s['Geliefert'] == False].copy()
-            df_s_fsc = df_s[df_s['Datum_Upload'].isin(df_p[fsc_mask]['Datum_Upload'])].copy() # Näherung via Upload-Zeitstempel
-            
-            bu_tot, es_tot, so_tot = get_species_stats(df_s.copy())
-            bu_done, es_done, so_done = get_species_stats(df_s_done)
-            bu_left, es_left, so_left = get_species_stats(df_s_left)
-            bu_fsc, es_fsc, so_fsc = get_species_stats(df_s_fsc)
-        else:
-            bu_tot = es_tot = so_tot = 0
-            bu_done = es_done = so_done = 0
-            bu_left = es_left = so_left = 0
-            bu_fsc = es_fsc = so_fsc = 0
-
-        # --- ANZEIGE UI ---
+        # ANZEIGE
         c1, c2, c3, c4 = st.columns(4)
         
-        # 1. Gekauft
-        c1.metric("🪵 Gekauft (Gesamt)", f"{total_fm:.2f} Fm")
-        c1.markdown(f"**Bu:** {bu_tot:.1f} | **Es:** {es_tot:.1f} | **So:** {so_tot:.1f}")
+        c1.metric("🪵 Gekauft (Gesamt)", f"{tot:.2f} Fm")
+        c1.caption(f"Bu: {s['total']['Bu']:.1f} | Es: {s['total']['Es']:.1f} | So: {s['total']['So']:.1f}")
         
-        # 2. Abgefahren
-        c2.metric("🚛 Abgefahren", f"{done_fm:.2f} Fm")
-        c2.markdown(f"**Bu:** {bu_done:.1f} | **Es:** {es_done:.1f} | **So:** {so_done:.1f}")
+        c2.metric("🚛 Abgefahren", f"{done:.2f} Fm")
+        c2.caption(f"Bu: {s['done']['Bu']:.1f} | Es: {s['done']['Es']:.1f} | So: {s['done']['So']:.1f}")
         
-        # 3. Rest
-        c3.metric("🌲 Noch im Wald", f"{remaining_fm:.2f} Fm")
-        c3.markdown(f"**Bu:** {bu_left:.1f} | **Es:** {es_left:.1f} | **So:** {so_left:.1f}")
+        c3.metric("🌲 Noch im Wald", f"{left:.2f} Fm")
+        c3.caption(f"Bu: {s['left']['Bu']:.1f} | Es: {s['left']['Es']:.1f} | So: {s['left']['So']:.1f}")
         
-        # 4. FSC
-        c4.metric("✅ Davon FSC", f"{fsc_fm:.2f} Fm")
-        c4.markdown(f"**Bu:** {bu_fsc:.1f} | **Es:** {es_fsc:.1f} | **So:** {so_fsc:.1f}")
+        c4.metric("✅ Davon FSC", f"{fsc:.2f} Fm")
+        c4.caption(f"Bu: {s['fsc']['Bu']:.1f} | Es: {s['fsc']['Es']:.1f} | So: {s['fsc']['So']:.1f}")
         
         st.divider()
         
-        # Karte
         pts = [{"lat": parse_gps_for_map(r['Lat']), "lon": parse_gps_for_map(r['Lon']), "info": f"Los {r['Los_Nr']}"} for _, r in df_p.iterrows() if parse_gps_for_map(r['Lat'])>0]
         if pts:
             m = folium.Map([pd.DataFrame(pts).lat.mean(), pd.DataFrame(pts).lon.mean()], zoom_start=9)
