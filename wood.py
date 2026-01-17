@@ -150,8 +150,8 @@ def save_to_json(data):
             "Ort": ort,
             "Zertifikat": zert,
             "Soll_Menge_Dokument": soll_menge,
-            "Status": "Bestand",   # NEU: Status Feld
-            "Geliefert": False     # NEU: Checkbox für Fuhrmann
+            "Status": "Bestand",   
+            "Geliefert": False     
         }
         db['polter'].append(entry)
 
@@ -171,7 +171,7 @@ def save_to_json(data):
             "Durchmesser": fmt(s.get('d')),
             "Gue_Kl": s.get('klasse', ''),
             "Volumen_Fm": fmt(s.get('fm')),
-            "Status": "Bestand"    # NEU
+            "Status": "Bestand"
         }
         db['staemme'].append(entry)
 
@@ -183,26 +183,19 @@ def delete_entry_by_timestamp(timestamp):
     db['staemme'] = [s for s in db['staemme'] if s.get('Datum_Upload') != timestamp]
     return save_db(db)
 
-# --- NEU: STATUS ÄNDERN (Bestand -> Transport) ---
 def move_to_transport(timestamp):
     db = load_db()
-    # Polter Status ändern
     for p in db['polter']:
         if p.get('Datum_Upload') == timestamp:
             p['Status'] = 'Transport'
-    
-    # Stämme Status ändern
     for s in db['staemme']:
         if s.get('Datum_Upload') == timestamp:
             s['Status'] = 'Transport'
-            
     return save_db(db)
 
-# --- NEU: LIEFERUNG ABHAKEN ---
 def update_polter_delivery(timestamp, polter_nr, is_delivered):
     db = load_db()
     for p in db['polter']:
-        # Wir suchen den exakten Polter in diesem Upload
         if p.get('Datum_Upload') == timestamp and str(p.get('Polter_Nr')) == str(polter_nr):
             p['Geliefert'] = is_delivered
             break
@@ -214,7 +207,6 @@ def load_data_frames():
     df_polter = pd.DataFrame(db['polter'])
     if not df_polter.empty:
         if 'Menge_Fm' in df_polter.columns: df_polter['Menge_Fm'] = df_polter['Menge_Fm'].apply(to_float)
-        # Default Werte falls alte JSON ohne diese Felder existiert
         if 'Status' not in df_polter.columns: df_polter['Status'] = 'Bestand'
         if 'Geliefert' not in df_polter.columns: df_polter['Geliefert'] = False
         
@@ -228,7 +220,6 @@ def load_data_frames():
 # --- APP START ---
 st.title("🌲 Forst-Verwaltung")
 
-# NEU: 3 Tabs statt 2
 tab1, tab2, tab3 = st.tabs(["📸 Scan & Analyse", "🗃️ Bestand", "🚛 Transport"])
 
 # --- TAB 1: SCANNER ---
@@ -341,29 +332,25 @@ with tab1:
                 st.session_state.analyzed_data = None
                 st.info("Daten im Bestand.")
 
-# --- TAB 2: BESTAND (Nur was noch NICHT beim Transport ist) ---
+# --- TAB 2: BESTAND (ALLES, AUCH TRANSPORT) ---
 with tab2:
     if st.button("🔄 Aktualisieren", key="refresh_bestand"): st.cache_data.clear()
     df_polter, df_staemme = load_data_frames()
     
-    # FILTER: Nur 'Bestand'
-    df_polter_view = df_polter[df_polter['Status'] == 'Bestand'] if not df_polter.empty else df_polter
-    df_staemme_view = df_staemme[df_staemme['Status'] == 'Bestand'] if not df_staemme.empty else df_staemme
-    
-    if df_polter_view.empty:
-        st.info("Keine offenen Listen im Bestand.")
+    if df_polter.empty:
+        st.info("Keine Daten.")
     else:
-        st.subheader("📊 Übersicht (Lager)")
+        st.subheader("📊 Übersicht (Gesamt)")
         c_stats, c_map = st.columns([1, 1]) 
         with c_stats:
-            if not df_staemme_view.empty and 'Holzart' in df_staemme_view.columns:
-                stats = df_staemme_view.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
+            if not df_staemme.empty and 'Holzart' in df_staemme.columns:
+                stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
                 st.dataframe(stats, height=200, use_container_width=True)
                 st.caption(f"Gesamt: {stats.sum():.2f} Fm")
         with c_map:
             all_pts = []
-            if 'Lat' in df_polter_view.columns:
-                for _, row in df_polter_view.iterrows():
+            if 'Lat' in df_polter.columns:
+                for _, row in df_polter.iterrows():
                     lat = parse_gps_for_map(row.get('Lat', ''))
                     lon = parse_gps_for_map(row.get('Lon', ''))
                     if lat > 0:
@@ -374,13 +361,17 @@ with tab2:
                 st_folium(m, width="100%", height=200, key="map_bestand_global")
 
         st.divider()
-        st.subheader("📂 Offene Akten")
+        st.subheader("📂 Alle Akten")
         
-        if 'Datum_Upload' in df_polter_view.columns:
-            df_polter_view = df_polter_view.sort_values(by="Datum_Upload", ascending=False)
-            groups = df_polter_view.groupby(['Datum_Upload', 'Revier', 'Los_Nr'])
+        if 'Datum_Upload' in df_polter.columns:
+            # Neueste zuerst
+            df_polter = df_polter.sort_values(by="Datum_Upload", ascending=False)
+            groups = df_polter.groupby(['Datum_Upload', 'Revier', 'Los_Nr'])
             
             for (upload_time, revier, los), group in groups:
+                # Status prüfen
+                is_transport = group['Status'].iloc[0] == 'Transport'
+                
                 polter_sum = group['Menge_Fm'].sum()
                 ort = group['Ort'].iloc[0] if 'Ort' in group.columns else ""
                 zert = group['Zertifikat'].iloc[0] if 'Zertifikat' in group.columns else ""
@@ -389,8 +380,8 @@ with tab2:
                 stem_info = ""
                 stamm_anzahl = 0
                 match = pd.DataFrame()
-                if not df_staemme_view.empty:
-                    match = df_staemme_view[df_staemme_view['Datum_Upload'] == upload_time]
+                if not df_staemme.empty:
+                    match = df_staemme[df_staemme['Datum_Upload'] == upload_time]
                     if not match.empty:
                         non_k = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
                         stamm_anzahl = len(non_k)
@@ -398,16 +389,21 @@ with tab2:
                             counts = non_k['Holzart'].value_counts().head(3)
                             stem_info = " | " + ", ".join([f"{k}: {v}" for k,v in counts.items()])
 
-                title = f"🌲 {revier} ({ort}) [{zert}] | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm | {stamm_anzahl} Stk{stem_info}"
+                # Titel mit Transport-Indikator
+                icon = "🚛 " if is_transport else "🌲 "
+                suffix = " (BEIM FUHRMANN)" if is_transport else ""
+                title = f"{icon}{revier} ({ort}) [{zert}] | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm | {stamm_anzahl} Stk{stem_info}{suffix}"
                 
                 with st.expander(title):
                     c_act, c_cnt = st.columns([1, 4])
                     with c_act:
-                        # BUTTON: ZUM TRANSPORT
-                        if st.button("🚚 Transport", key=f"mv_{upload_time}", help="Liste an Fuhrmann übergeben"):
-                            if move_to_transport(upload_time):
-                                st.success("Verschoben!")
-                                st.rerun()
+                        if not is_transport:
+                            if st.button("🚛 Transport", key=f"mv_{upload_time}", help="Liste an Fuhrmann übergeben"):
+                                if move_to_transport(upload_time):
+                                    st.success("Verschoben!")
+                                    st.rerun()
+                        else:
+                            st.info("Bereits im Transport")
                         
                         if st.button("🗑️ Löschen", key=f"del_{upload_time}"):
                             delete_entry_by_timestamp(upload_time)
@@ -436,12 +432,10 @@ with tab3:
     else:
         st.subheader("🚛 Beim Fuhrmann")
         
-        # Sortierung
         df_polter_trans = df_polter_trans.sort_values(by="Datum_Upload", ascending=False)
         groups = df_polter_trans.groupby(['Datum_Upload', 'Revier', 'Los_Nr'])
         
         for (upload_time, revier, los), group in groups:
-            # Fortschritt berechnen
             total_polter = len(group)
             done_polter = len(group[group['Geliefert'] == True])
             progress = done_polter / total_polter if total_polter > 0 else 0
@@ -452,50 +446,27 @@ with tab3:
             
             with st.expander(title):
                 st.progress(progress)
-                
                 c1, c2 = st.columns([2, 1])
                 
                 with c1:
                     st.markdown("### Abfahr-Liste")
                     st.info("Haken setzen, wenn Polter abgefahren wurde:")
-                    
-                    # EDITOR FÜR CHECKBOXEN
-                    # Wir zeigen nur relevante Spalten + 'Geliefert'
                     edit_df = group[['Polter_Nr', 'Menge_Fm', 'Geliefert', 'Lat', 'Lon']].copy()
-                    
-                    # data_editor erlaubt das Bearbeiten
                     edited_data = st.data_editor(
                         edit_df,
-                        column_config={
-                            "Geliefert": st.column_config.CheckboxColumn(
-                                "Abgefahren?",
-                                help="Wurde dieser Polter abgeholt?",
-                                default=False,
-                            )
-                        },
-                        disabled=["Polter_Nr", "Menge_Fm", "Lat", "Lon"], # Nur Checkbox editierbar
+                        column_config={"Geliefert": st.column_config.CheckboxColumn("Abgefahren?", default=False)},
+                        disabled=["Polter_Nr", "Menge_Fm", "Lat", "Lon"],
                         hide_index=True,
                         key=f"editor_{upload_time}"
                     )
                     
-                    # ÄNDERUNGEN SPEICHERN
-                    # Wir vergleichen edited_data mit dem Original group state
-                    # Da st.data_editor bei jeder Änderung neu rendert, müssen wir die Änderungen in die DB schreiben
-                    # Wir iterieren durch die editierten Daten
-                    
                     for index, row in edited_data.iterrows():
-                        original_val = group.loc[index, 'Geliefert']
-                        new_val = row['Geliefert']
-                        if original_val != new_val:
-                            # DB Update triggern
-                            update_polter_delivery(upload_time, row['Polter_Nr'], new_val)
+                        if group.loc[index, 'Geliefert'] != row['Geliefert']:
+                            update_polter_delivery(upload_time, row['Polter_Nr'], row['Geliefert'])
                             st.toast(f"Polter {row['Polter_Nr']} Status gespeichert!")
-                            # Optional: st.rerun() wenn man sofortigen Refresh will, kann aber nerven beim Klicken
                             
                 with c2:
                     st.markdown("### Karte")
-                    # Zeige nur die Polter, die noch NICHT geliefert sind in Rot, gelieferte in Grün?
-                    # Oder einfach alle.
                     v_pts = []
                     for _, r in group.iterrows():
                         lat = parse_gps_for_map(r.get('Lat', ''))
@@ -508,14 +479,9 @@ with tab3:
                         m_df = pd.DataFrame(v_pts)
                         m = folium.Map(location=[m_df.lat.mean(), m_df.lon.mean()], zoom_start=13)
                         for pt in v_pts:
-                            folium.Marker(
-                                [pt['lat'], pt['lon']], 
-                                popup=pt['info'], 
-                                icon=folium.Icon(color=pt['c'], icon="truck", prefix='fa')
-                            ).add_to(m)
+                            folium.Marker([pt['lat'], pt['lon']], popup=pt['info'], icon=folium.Icon(color=pt['c'], icon="truck", prefix='fa')).add_to(m)
                         st_folium(m, width="100%", height=300, key=f"map_trans_{upload_time}")
                 
-                # Button um es ganz zu archivieren / löschen wenn fertig?
                 if done_polter == total_polter:
                     st.success("✅ Auftrag komplett erledigt!")
                     if st.button("Archivieren (Löschen)", key=f"arc_{upload_time}"):
