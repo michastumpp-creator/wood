@@ -22,6 +22,27 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
+# --- CSS TWEAKS FÜR MOBIL (KOMPAKT) ---
+st.markdown("""
+    <style>
+        /* Schriftgröße in Tabellen verkleinern */
+        div[data-testid="stDataEditor"] table, div[data-testid="stDataFrame"] table {
+            font-size: 0.8rem !important;
+        }
+        /* Zellen-Abstände radikal verringern (Kein Freiraum) */
+        div[data-testid="stDataEditor"] th, div[data-testid="stDataEditor"] td {
+            padding-left: 2px !important;
+            padding-right: 2px !important;
+            padding-top: 4px !important;
+            padding-bottom: 4px !important;
+        }
+        /* Checkbox Spalten enger machen */
+        div[data-testid="stDataEditor"] [data-testid="stCheckbox"] {
+            width: 20px !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- SESSION STATE ---
 if 'analyzed_data' not in st.session_state:
     st.session_state.analyzed_data = None
@@ -32,13 +53,10 @@ if 'messages' not in st.session_state:
 
 # --- HELFER ---
 def load_prompt():
-    """Lädt den Prompt aus der externen Datei oder nutzt Fallback"""
     try:
         if os.path.exists("system_prompt.txt"):
-            with open("system_prompt.txt", "r", encoding="utf-8") as f:
-                return f.read()
-    except:
-        pass
+            with open("system_prompt.txt", "r", encoding="utf-8") as f: return f.read()
+    except: pass
     return None 
 
 def to_float(val):
@@ -183,9 +201,8 @@ def save_to_json(data, source_files=None):
         wnr = s.get('wnr', '')
         if s.get('klammer'): wnr = f"{wnr} (K)"
         
-        # MAPPING JSON -> DB
-        gue_kl = s.get('g', '')   # G = Güte
-        dm_kl = s.get('kl', '')   # KL = Klasse
+        gue_kl = s.get('g', s.get('klasse', ''))
+        dm_kl = s.get('kl', '')
 
         db['staemme'].append({
             "Datum_Upload": timestamp, "Los_Nr": los, "Revier": revier, "WNr": wnr,
@@ -460,6 +477,7 @@ with tab1:
         
         st.divider()
         stems = data.get('staemme', [])
+        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
@@ -564,7 +582,7 @@ with tab2:
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
                                     "Gue_Kl": st.column_config.TextColumn("G", width="small"),  # REIHENFOLGE GEÄNDERT
                                     "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
-                                    "Info": st.column_config.TextColumn("Info", width="medium"),
+                                    "Info": st.column_config.TextColumn("Info", width="small"), # AUCH SMALL
                                     "WNr": st.column_config.TextColumn("WNr", width="small")
                                 }
                             )
@@ -636,7 +654,7 @@ with tab3:
                                 "Gue_Kl": st.column_config.TextColumn("G", width="small"), # REIHENFOLGE GEÄNDERT
                                 "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
-                                "Info": st.column_config.TextColumn("Info", width="medium"),
+                                "Info": st.column_config.TextColumn("Info", width="small"), # AUCH SMALL
                                 "WNr": st.column_config.TextColumn("WNr", width="small")
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
