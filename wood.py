@@ -185,59 +185,89 @@ def load_data_frames():
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
 
-# --- GENERATE LIST TITLE (HELFER) ---
+# --- HELFER: EXCEL EXPORT ---
+def convert_df_to_excel(df_p, df_s):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        if not df_p.empty: df_p.to_excel(writer, index=False, sheet_name='Polter')
+        if not df_s.empty: df_s.to_excel(writer, index=False, sheet_name='Einzelstaemme')
+    return output.getvalue()
+
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
-    # Status Infos
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
-    
-    # Mengen Infos
     vol = group_polter['Menge_Fm'].sum()
     stamm_anzahl = 0
     if not group_stems.empty:
-        # Nur echte Stämme zählen (ohne Klammer)
         non_k = group_stems[~group_stems['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
         stamm_anzahl = len(non_k)
 
-    # Status Text & Icon Logik
     status_text = ""
     is_gray = False
-    
     if status == 'Transport':
         if total_p > 0 and done_p == total_p:
-            status_text = "✅ KOMPLETT ABGEFAHREN"
-            is_gray = True
+            status_text = "✅ KOMPLETT ABGEFAHREN"; is_gray = True
         elif done_p > 0:
             status_text = f"⚠️ TEILWEISE ({done_p}/{total_p})"
-        else:
-            status_text = "⏳ WARTET AUF ABFUHR"
+        else: status_text = "⏳ WARTET AUF ABFUHR"
         icon = "🚛"
     else:
-        status_text = "🌲 BESTAND"
-        icon = "🌲"
+        status_text = "🌲 BESTAND"; icon = "🌲"
 
-    # String bauen
     ort_str = f"({ort})" if ort else ""
     zert_str = f"[{zert}]" if zert else ""
-    
     base = f"{icon} {status_text} | {revier} {ort_str} {zert_str} | Los {los} | 📅 {datum_auf} | 📦 {vol:.2f} Fm | 🪵 {stamm_anzahl} Stk"
-    
-    if is_gray: return f"`{base}`"
-    return base
+    return f"`{base}`" if is_gray else base
 
-# --- SEITENLEISTE ---
+# --- SEITENLEISTE (STATUS, BACKUP, EXPORT) ---
 with st.sidebar:
-    st.header("Datenbank Status")
+    st.header("⚙️ Verwaltung")
+    
+    # 1. DB STATUS
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f: d = json.load(f)
-            st.success(f"🟢 OK ({len(d.get('polter', []))} Polter)")
+            st.success(f"Datenbank aktiv\n\n📄 {len(d.get('polter', []))} Polter")
+            
+            st.divider()
+            
+            # 2. BACKUP (JSON)
+            st.markdown("**Sicherung:**")
+            with open(DB_FILE, "r") as f:
+                st.download_button(
+                    label="⬇️ Datenbank sichern (Backup)",
+                    data=f,
+                    file_name=f"backup_forst_{datetime.now().strftime('%Y-%m-%d')}.json",
+                    mime="application/json",
+                    help="Lade die komplette Datenbank herunter, um sie zu sichern."
+                )
+
+            # 3. EXPORT (EXCEL)
+            st.markdown("**Export:**")
+            df_p_ex, df_s_ex = load_data_frames()
+            if not df_p_ex.empty:
+                excel_data = convert_df_to_excel(df_p_ex, df_s_ex)
+                st.download_button(
+                    label="📊 Alles als Excel laden",
+                    data=excel_data,
+                    file_name=f"forst_export_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Erstellt eine Excel-Datei für Abrechnungen."
+                )
+            
+            st.divider()
+            
+            # 4. RESET (GEFAHR)
+            with st.expander("Gefahrenzone"):
+                if st.button("🗑️ Alle Daten löschen (Reset)"):
+                    os.remove(DB_FILE); st.rerun()
+
         except:
             st.error("🔴 Datei beschädigt!")
-            if st.button("🗑️ Reset DB"):
+            if st.button("🗑️ Reset (Reparieren)"):
                 os.remove(DB_FILE); st.rerun()
-    else: st.info("⚪ Leer")
+    else: st.info("⚪ Datenbank leer")
 
 # --- APP START ---
 st.title("🌲 Forst-Verwaltung")
@@ -352,11 +382,8 @@ with tab2:
             for (ut, rev, los), grp in groups:
                 is_trans = grp['Status'].iloc[0] == 'Transport'
                 note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
-                
-                # Zugehörige Stämme
                 match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                 
-                # Titel generieren
                 ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
                 zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
                 datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
@@ -410,11 +437,8 @@ with tab3:
         for (ut, rev, los), grp in groups:
             done = len(grp[grp['Geliefert'] == True]); total = len(grp)
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
-            
-            # Zugehörige Stämme
             match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
-
-            # Titel generieren
+            
             ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
             zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
             datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
@@ -451,7 +475,6 @@ with tab3:
                         )
                     else: st.caption("Keine Einzelstämme.")
 
-                # Karte
                 v_pts = []
                 for _, r in grp.iterrows():
                     la, lo = parse_gps_for_map(r.get('Lat','')), parse_gps_for_map(r.get('Lon',''))
