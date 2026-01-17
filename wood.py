@@ -22,35 +22,45 @@ BACKUP_DIR = "backups"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# --- CSS: MOBILE OPTIMIERUNG (ULTRA KOMPAKT) ---
+# --- CSS: MOBILE ZOOM & OPTIMIERUNG ---
 st.markdown("""
     <style>
-        /* Schriftgröße winzig für maximalen Platz */
-        div[data-testid="stDataEditor"] {
-            font-size: 10px !important;
-        }
-        /* Header extrem eng */
-        div[data-testid="stDataEditor"] th {
-            font-size: 10px !important;
-            padding: 1px !important;
-            min-width: 15px !important; /* ZWINGT DIE SPALTEN ZUSAMMEN */
-            max-width: 40px !important;
-        }
-        /* Zellen extrem eng */
-        div[data-testid="stDataEditor"] td {
-            font-size: 10px !important;
-            padding: 0px 1px !important;
-            min-width: 15px !important;
-        }
-        /* Checkbox Spalte minimieren */
-        div[data-testid="stDataEditor"] [data-testid="stCheckbox"] {
-            width: 12px !important;
-            margin: 0px !important;
-        }
-        /* Ganze Tabelle breiter ziehen auf Handy */
-        .block-container {
-            padding-left: 0.5rem;
-            padding-right: 0.5rem;
+        /* NUR FÜR HANDYS (Bildschirm kleiner 600px) */
+        @media only screen and (max-width: 600px) {
+            
+            /* Der Trick: Tabelle herauszoomen (auf 82% Größe), damit sie passt */
+            div[data-testid="stDataEditor"] {
+                transform: scale(0.82);
+                transform-origin: top left;
+                width: 122% !important; /* Container breiter machen zum Ausgleich */
+                margin-bottom: -40px; /* Leerraum unten entfernen */
+            }
+
+            /* Schriftarten extrem kompakt erzwingen */
+            div[data-testid="stDataEditor"] div, 
+            div[data-testid="stDataEditor"] span,
+            div[data-testid="stDataEditor"] input {
+                font-size: 10px !important;
+                line-height: 1.0 !important;
+            }
+
+            /* Spaltenköpfe */
+            div[data-testid="stDataEditor"] th {
+                font-size: 10px !important;
+                padding: 1px !important;
+            }
+            
+            /* Zeilenhöhe verringern */
+            div[data-testid="stDataEditor"] td {
+                padding-top: 0px !important;
+                padding-bottom: 0px !important;
+            }
+
+            /* Seitenränder minimieren */
+            .block-container {
+                padding-left: 0.2rem !important;
+                padding-right: 0.2rem !important;
+            }
         }
     </style>
 """, unsafe_allow_html=True)
@@ -443,8 +453,8 @@ with tab1:
                    - art: Holzart
                    - l: Länge
                    - d: Durchmesser
-                   - kl: Durchmesserklasse/Stärkeklasse (Suche Spalte 'KL' oder 'Stkl')
-                   - g: Güteklasse/Qualität (Suche Spalte 'G' oder 'Qualität')
+                   - kl: Durchmesserklasse (aus 'KL')
+                   - g: Güteklasse (aus 'G')
                    - fm: Festmeter
                    - klammer: true (wenn 'K' oder geklammert)
                 3. POLTER: nr, fm, lat, lon (GPS)."""
@@ -457,7 +467,6 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            # MODELL UPDATE: Pro Preview
                             res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
@@ -584,16 +593,15 @@ with tab2:
                             # MOBILE OPTIMIERUNG & Header G / KL
                             edited_stems = st.data_editor(
                                 match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Gue_Kl', 'Dm_Kl', 'Info']], 
-                                use_container_width=True,
                                 key=f"ed_st_b_{ut}", 
                                 hide_index=True,
                                 column_config={
                                     "Holzart": st.column_config.TextColumn("H", width="small"),
                                     "Laenge": st.column_config.TextColumn("L", width="small"),
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"), # REIHENFOLGE GEÄNDERT
-                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
-                                    "Info": st.column_config.TextColumn("Info", width="small"), # AUCH SMALL
+                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"),
+                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
+                                    "Info": st.column_config.TextColumn("Info", width="small"),
                                     "WNr": st.column_config.TextColumn("#", width="small")
                                 }
                             )
@@ -662,10 +670,10 @@ with tab3:
                             column_config={
                                 "Holzart": st.column_config.TextColumn("H", width="small"),
                                 "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
-                                "Gue_Kl": st.column_config.TextColumn("G", width="small"), # REIHENFOLGE GEÄNDERT
-                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # REIHENFOLGE GEÄNDERT
+                                "Gue_Kl": st.column_config.TextColumn("G", width="small"),
+                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
-                                "Info": st.column_config.TextColumn("Info", width="small"), # AUCH SMALL
+                                "Info": st.column_config.TextColumn("Info", width="small"),
                                 "WNr": st.column_config.TextColumn("#", width="small")
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
