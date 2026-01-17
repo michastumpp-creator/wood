@@ -86,26 +86,20 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
         images.append(Image.open(io.BytesIO(img_data)))
     return images
 
-# --- LOKALE DATENBANK (ROBUST) ---
+# --- LOKALE DATENBANK ---
 def load_db():
-    if not os.path.exists(DB_FILE):
-        return {"polter": [], "staemme": []}
+    if not os.path.exists(DB_FILE): return {"polter": [], "staemme": []}
     try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # Wir geben leere Daten zurück, damit die App nicht crasht.
-        # Der Fehler wird in der Sidebar angezeigt (siehe unten).
-        return {"polter": [], "staemme": []}
+        with open(DB_FILE, "r", encoding="utf-8") as f: return json.load(f)
+    except Exception: return {"polter": [], "staemme": []}
 
 def save_db(db_data):
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
-            # indent=4 macht es lesbar, ensure_ascii=False lässt Umlaute drin
             json.dump(db_data, f, ensure_ascii=False, indent=4)
         return True
     except Exception as e:
-        st.error(f"Fehler beim Speichern: {e}")
+        st.error(f"Fehler: {e}")
         return False
 
 # --- DATEN OPERATIONEN ---
@@ -119,7 +113,6 @@ def save_to_json(data):
     soll_menge = str(meta.get('dokument_summe', 0)).replace('.', ',')
     def fmt(val): return str(val).replace(',', '.') if val is not None else ""
 
-    # Polter
     for p in data.get('polter', []):
         lat_text, lon_text = str(p.get('lat', '')), str(p.get('lon', ''))
         try:
@@ -133,7 +126,6 @@ def save_to_json(data):
             "Status": "Bestand", "Geliefert": False, "Notiz": ""
         })
 
-    # Stämme
     for s in data.get('staemme', []):
         wnr = s.get('wnr', '')
         if s.get('klammer'): wnr = f"{wnr} (K)"
@@ -159,31 +151,36 @@ def move_to_transport(timestamp):
         if s.get('Datum_Upload') == timestamp: s['Status'] = 'Transport'
     return save_db(db)
 
-def update_db_from_editor(edited_df, timestamp, type="polter"):
+# --- BATCH UPDATE FUNKTION (Speichert alles auf einmal) ---
+def apply_batch_updates(timestamp, new_note, polter_df, staemme_df):
+    """
+    Nimmt die bearbeiteten DataFrames und speichert alles in einem Rutsch.
+    """
     db = load_db()
-    changed = False
-    for index, row in edited_df.iterrows():
-        if type == "polter":
+    
+    # 1. Notiz Update
+    for p in db['polter']:
+        if p.get('Datum_Upload') == timestamp:
+            p['Notiz'] = new_note
+
+    # 2. Polter Update (Geliefert Status)
+    if not polter_df.empty:
+        for index, row in polter_df.iterrows():
             for p in db['polter']:
                 if p.get('Datum_Upload') == timestamp and str(p.get('Polter_Nr')) == str(row['Polter_Nr']):
-                    if 'Geliefert' in row and p.get('Geliefert') != row['Geliefert']:
-                        p['Geliefert'] = row['Geliefert']; changed = True
+                    if 'Geliefert' in row: p['Geliefert'] = row['Geliefert']
                     break
-        elif type == "staemme":
+    
+    # 3. Stämme Update (Geliefert & Info)
+    if not staemme_df.empty:
+        for index, row in staemme_df.iterrows():
             for s in db['staemme']:
                 if s.get('Datum_Upload') == timestamp and str(s.get('WNr')) == str(row['WNr']):
-                    if 'Geliefert' in row and s.get('Geliefert') != row['Geliefert']:
-                        s['Geliefert'] = row['Geliefert']; changed = True
-                    if 'Info' in row and s.get('Info') != row['Info']:
-                        s['Info'] = str(row['Info']); changed = True
+                    if 'Geliefert' in row: s['Geliefert'] = row['Geliefert']
+                    if 'Info' in row: s['Info'] = str(row['Info'])
                     break
-    if changed: save_db(db)
-
-def update_global_note(timestamp, new_note):
-    db = load_db()
-    for p in db['polter']:
-        if p.get('Datum_Upload') == timestamp: p['Notiz'] = new_note
-    save_db(db)
+    
+    return save_db(db)
 
 def load_data_frames():
     db = load_db()
@@ -199,23 +196,18 @@ def load_data_frames():
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
 
-# --- SEITENLEISTE (STATUS & NOTFALL-RESET) ---
+# --- SEITENLEISTE ---
 with st.sidebar:
     st.header("Datenbank Status")
-    db_ok = False
     if os.path.exists(DB_FILE):
         try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
+            with open(DB_FILE, "r", encoding="utf-8") as f: d = json.load(f)
             st.success(f"🟢 OK ({len(d.get('polter', []))} Polter)")
-            db_ok = True
-        except Exception as e:
-            st.error(f"🔴 Defekt! ({e})")
-            if st.button("🗑️ Defekte Datenbank löschen (Reset)"):
-                os.remove(DB_FILE)
-                st.rerun()
-    else:
-        st.info("⚪ Leer (Noch keine Datei)")
+        except:
+            st.error("🔴 Datei beschädigt!")
+            if st.button("🗑️ Reset DB"):
+                os.remove(DB_FILE); st.rerun()
+    else: st.info("⚪ Leer")
 
 # --- APP START ---
 st.title("🌲 Forst-Verwaltung")
@@ -234,12 +226,7 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
-                prompt = load_prompt() or """
-                Du bist ein KI-Assistent. Analysiere exakt.
-                1. META: "Gesamtmenge", "Stämme gezählt", "Revier Ort", "Zertifikat".
-                2. STÄMME: Tabelle lesen. "K" -> klammer: true.
-                3. POLTER: GPS als String.
-                """
+                prompt = load_prompt() or """Analysiere Holzliste: META(Gesamtmenge, Stämme gezählt, Revier Ort, Zertifikat), STÄMME(Tabelle), POLTER(GPS)."""
                 agg = {"meta": {}, "polter": [], "staemme": [], "sum": 0.0, "cnt": 0.0}
                 pbar = st.progress(0)
                 for i, uf in enumerate(uploaded_files):
@@ -262,47 +249,48 @@ with tab1:
                 
                 agg["meta"]["dokument_summe"] = agg["sum"]; agg["meta"]["dokument_anzahl_staemme"] = agg["cnt"]
                 st.session_state.analyzed_data = agg
-                try: 
-                    r = client.models.generate_content(model="gemini-3-flash-preview", contents=f"Check: {json.dumps(agg)}. Summe ok? Kurz.")
-                    st.session_state.messages.append({"role": "assistant", "content": r.text})
-                except: pass
                 st.rerun()
 
     if st.session_state.analyzed_data:
-        d = st.session_state.analyzed_data
+        data = st.session_state.analyzed_data
         st.warning("⚠️ Daten noch nicht gespeichert!")
+        
         st.divider(); st.subheader("💬 KI-Assistent")
         for m in st.session_state.messages: st.chat_message(m["role"]).write(m["content"])
         if u := st.chat_input("Frage..."):
             st.session_state.messages.append({"role": "user", "content": u}); st.chat_message("user").write(u)
             with st.spinner("..."):
-                r = client.models.generate_content(model="gemini-3-flash-preview", contents=f"Daten: {json.dumps(d)}\nFrage: {u}\nAntworte kurz.")
+                r = client.models.generate_content(model="gemini-3-flash-preview", contents=f"Daten: {json.dumps(data)}\nFrage: {u}\nAntworte kurz.")
                 st.session_state.messages.append({"role": "assistant", "content": r.text}); st.rerun()
         
         st.divider()
-        stems, v_stems = d.get('staemme', []), [s for s in d.get('staemme', []) if not s.get('klammer')]
-        ds, dc = to_float(d.get('meta', {}).get('dokument_summe', 0)), int(to_float(d.get('meta', {}).get('dokument_anzahl_staemme', 0)))
-        ss = sum([to_float(s.get('fm', 0)) for s in stems])
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Festmeter", f"{ds:.2f} / {ss:.2f}", delta=round(ss-ds, 2))
-        c2.metric("Stückzahl", f"{dc} / {len(v_stems)}", delta=len(v_stems)-dc)
-        c3.metric("Polter", len(d.get('polter', [])))
+        stems = data.get('staemme', [])
+        doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
+        stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Festmeter", f"{doc_sum:.2f} / {stamm_sum:.2f}", delta=round(stamm_sum-doc_sum, 2))
+        c3.metric(f"Polter", len(data.get('polter', [])))
+
         with st.expander("PDF-Check"):
             if uploaded_files:
                 tabs = st.tabs([f.name for f in uploaded_files])
                 for i, t in enumerate(tabs):
                     with t:
                         if uploaded_files[i].type=="application/pdf":
-                            imgs = create_highlighted_pdf_images(uploaded_files[i], 0, 0, d.get('polter', []))
+                            imgs = create_highlighted_pdf_images(uploaded_files[i], 0, 0, data.get('polter', []))
                             if imgs: 
                                 cols = st.columns(len(imgs))
                                 for j, im in enumerate(imgs): 
                                     with cols[j]: st.image(im, caption=f"S.{j+1}", use_container_width=True)
                         else: st.image(uploaded_files[i], width=300)
         with st.expander("Daten"): st.dataframe(pd.DataFrame(stems))
+        
         if st.button("💾 Speichern"):
-            if save_to_json(d): st.success("Gespeichert!"); st.session_state.analyzed_data = None; st.info("Im Bestand."); st.rerun()
+            if save_to_json(data):
+                st.success("Gespeichert!")
+                st.session_state.analyzed_data = None
+                st.rerun()
 
 # --- TAB 2: BESTAND ---
 with tab2:
@@ -335,19 +323,23 @@ with tab2:
                 note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
                 
                 with st.expander(f"{icon}{rev} | Los {los} | {grp['Menge_Fm'].sum():.2f} Fm{suffix}"):
+                    # Eingabe-Widgets (KEIN AUTO-SAVE!)
                     new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
-                    if new_note != note_val: update_global_note(ut, new_note)
-
+                    
                     c_act, c_cnt = st.columns([1, 4])
                     with c_act:
-                        if not is_trans and st.button("Start Transport", key=f"mt_{ut}"): move_to_transport(ut); st.rerun()
-                        if st.button("Löschen", key=f"dl_{ut}"): delete_entry_by_timestamp(ut); st.rerun()
-                    
+                        if not is_trans and st.button("Start Transport", key=f"mt_{ut}"):
+                            move_to_transport(ut); st.rerun()
+                        if st.button("Löschen", key=f"dl_{ut}"):
+                            delete_entry_by_timestamp(ut); st.rerun()
+
                     c1, c2 = st.columns([1, 1])
                     c1.markdown("**Polter**"); c1.dataframe(grp[['Polter_Nr', 'Menge_Fm', 'Lat', 'Lon']], hide_index=True)
                     
+                    match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
+                    edited_stems = pd.DataFrame()
+                    
                     with c2:
-                        match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
                             cols_show = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Info'] if c in match.columns]
@@ -357,7 +349,12 @@ with tab2:
                                 hide_index=True,
                                 column_config={"Info": st.column_config.TextColumn("Info", width="small")}
                             )
-                            update_db_from_editor(edited_stems, ut, "staemme")
+                        else: st.caption("Keine Stämme.")
+                    
+                    # DER SPEICHER BUTTON
+                    if st.button("💾 Änderungen speichern", key=f"sv_b_{ut}"):
+                        apply_batch_updates(ut, new_note, pd.DataFrame(), edited_stems)
+                        st.success("Gespeichert!"); st.rerun()
 
 # --- TAB 3: TRANSPORT ---
 with tab3:
@@ -372,35 +369,32 @@ with tab3:
         groups = df_pt.groupby(['Datum_Upload', 'Revier', 'Los_Nr'])
         
         for (ut, rev, los), grp in groups:
-            done = len(grp[grp['Geliefert']]); total = len(grp)
+            done = len(grp[grp['Geliefert'] == True]); total = len(grp)
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
             
             with st.expander(f"🚛 {rev} | Los {los} | {done}/{total} Polter fertig"):
                 st.progress(done/total if total>0 else 0)
-                st.info(f"📋 **Notiz:** {note_val}")
-                n_note = st.text_area("Update Notiz:", value=note_val, key=f"note_t_{ut}")
-                if n_note != note_val: update_global_note(ut, n_note); st.rerun()
+                n_note = st.text_area("Notiz:", value=note_val, key=f"note_t_{ut}")
 
                 c1, c2 = st.columns([1, 1])
+                edited_p = pd.DataFrame()
+                edited_s = pd.DataFrame()
+
                 with c1:
                     st.markdown("### 1. Polter Abhaken")
-                    edit_p = st.data_editor(
+                    edited_p = st.data_editor(
                         grp[['Polter_Nr', 'Menge_Fm', 'Geliefert']],
                         column_config={"Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False)},
                         hide_index=True, key=f"ed_p_t_{ut}"
                     )
-                    update_db_from_editor(edit_p, ut, "polter")
                 
                 with c2:
                     st.markdown("### 2. Einzelstämme")
                     match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                     if not match.empty:
-                        # Hier sind alle Spalten sicher da, da wir sie im DataFrame haben
-                        cols_s = ['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info']
-                        # Prüfen ob alle Spalten existieren um KeyError zu vermeiden
-                        cols_s = [c for c in cols_s if c in match.columns]
-                        
-                        edit_s = st.data_editor(
+                        # Spalten sicherstellen
+                        cols_s = [c for c in ['WNr', 'Holzart', 'Volumen_Fm', 'Geliefert', 'Info'] if c in match.columns]
+                        edited_s = st.data_editor(
                             match[cols_s],
                             column_config={
                                 "Geliefert": st.column_config.CheckboxColumn("Geliefert", default=False),
@@ -408,18 +402,17 @@ with tab3:
                             },
                             hide_index=True, key=f"ed_s_t_{ut}"
                         )
-                        update_db_from_editor(edit_s, ut, "staemme")
                     else: st.caption("Keine Einzelstämme.")
 
-                v_pts = []
-                for _, r in grp.iterrows():
-                    la, lo = parse_gps_for_map(r.get('Lat','')), parse_gps_for_map(r.get('Lon',''))
-                    if la > 0: v_pts.append({"lat": la, "lon": lo, "c": "gray" if r['Geliefert'] else "red"})
-                if v_pts:
-                    m = folium.Map([pd.DataFrame(v_pts).lat.mean(), pd.DataFrame(v_pts).lon.mean()], zoom_start=13)
-                    for p in v_pts: folium.Marker([p['lat'], p['lon']], icon=folium.Icon(color=p['c'], icon="truck", prefix='fa')).add_to(m)
-                    st_folium(m, width="100%", height=250, key=f"mp_t_{ut}")
+                # Karte anzeigen...
+                
+                # DER SPEICHER BUTTON
+                if st.button("💾 Änderungen speichern", key=f"sv_t_{ut}"):
+                    apply_batch_updates(ut, n_note, edited_p, edited_s)
+                    st.success("Gespeichert!")
+                    st.rerun()
                 
                 if done == total and total > 0:
-                    st.success("Auftrag (Polter) vollständig!")
-                    if st.button("Archivieren", key=f"arc_{ut}"): delete_entry_by_timestamp(ut); st.rerun()
+                    st.success("✅ Auftrag erledigt!")
+                    if st.button("Archivieren", key=f"arc_{ut}"):
+                        delete_entry_by_timestamp(ut); st.rerun()
