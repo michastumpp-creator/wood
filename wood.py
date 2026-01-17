@@ -181,14 +181,14 @@ def save_to_json(data, source_files=None):
         if s.get('klammer'): wnr = f"{wnr} (K)"
         
         # PROMPT MAPPING: g -> Gue_Kl, kl -> Dm_Kl
-        gue_kl = s.get('g', s.get('klasse', '')) # Fallback auf alt
+        gue_kl = s.get('g', s.get('klasse', ''))
         dm_kl = s.get('kl', '')
 
         db['staemme'].append({
             "Datum_Upload": timestamp, "Los_Nr": los, "Revier": revier, "WNr": wnr,
             "Holzart": s.get('art', ''), "Laenge": fmt(s.get('l')), "Durchmesser": fmt(s.get('d')),
             "Gue_Kl": gue_kl,
-            "Dm_Kl": dm_kl, # NEU: Durchmesserklasse aus KL
+            "Dm_Kl": dm_kl, 
             "Volumen_Fm": fmt(s.get('fm')),
             "Status": "Bestand", "Geliefert": False, "Info": ""
         })
@@ -239,7 +239,6 @@ def load_data_frames():
     df_s = pd.DataFrame(db['staemme'])
     if not df_s.empty:
         if 'Volumen_Fm' in df_s.columns: df_s['Volumen_Fm'] = df_s['Volumen_Fm'].apply(to_float)
-        # NEUE FELDER SICHERSTELLEN
         for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', ''), ('Holzart', ''), ('Gue_Kl', ''), ('Dm_Kl', '')]:
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
@@ -256,7 +255,6 @@ def convert_df_to_excel(df_p, df_s):
 
 def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zert, datum_auf):
     status = group_polter['Status'].iloc[0] if not group_polter.empty else "Bestand"
-    
     done_p = len(group_polter[group_polter['Geliefert'] == True])
     total_p = len(group_polter)
     done_s = 0
@@ -307,7 +305,6 @@ def show_files_section(file_paths, key_prefix):
                     st.image(path, width=150)
         else: st.warning(f"Datei fehlt: {path}")
 
-# --- HOLZARTEN KLASSIFIZIERUNG ---
 def get_species_group(holzart):
     h = str(holzart).lower()
     if "bu" in h: return "Bu"
@@ -405,7 +402,7 @@ with tab1:
 
         if st.session_state.analyzed_data is None:
             if st.button(f"🚀 {len(uploaded_files)} Dateien Analysieren"):
-                # PROMPT UPDATE: G und KL erfassen
+                # PROMPT UPDATE: G und KL exakt
                 prompt = load_prompt() or """Analysiere Holzliste.
                 1. META: Gesamtmenge (dokument_summe), Stämme gezählt (dokument_anzahl_staemme), Revier Ort, Zertifikat.
                 2. STÄMME (Tabelle): 
@@ -413,8 +410,8 @@ with tab1:
                    - art: Holzart
                    - l: Länge
                    - d: Durchmesser
-                   - kl: Durchmesserklasse (aus Spalte 'KL' oder 'Stärkeklasse')
-                   - g: Güteklasse (aus Spalte 'G' oder 'Qualität')
+                   - kl: Durchmesserklasse/Stärkeklasse (Suche Spalte 'KL' oder 'Stkl')
+                   - g: Güteklasse/Qualität (Suche Spalte 'G' oder 'Qualität')
                    - fm: Festmeter
                    - klammer: true (wenn 'K' oder geklammert)
                 3. POLTER: nr, fm, lat, lon (GPS)."""
@@ -427,7 +424,7 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
+                            res = client.models.generate_content(model="gemini-3-flash-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
                             else: 
@@ -550,7 +547,7 @@ with tab2:
                     with c2:
                         if not match.empty:
                             st.markdown("**Stämme (Info editierbar)**")
-                            # MOBILE OPTIMIERUNG & NEUE SPALTEN
+                            # MOBILE OPTIMIERUNG & Header G / KL
                             edited_stems = st.data_editor(
                                 match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Dm_Kl', 'Gue_Kl', 'Info']], 
                                 key=f"ed_st_b_{ut}", 
@@ -559,8 +556,8 @@ with tab2:
                                     "Holzart": st.column_config.TextColumn("H", width="small"),
                                     "Laenge": st.column_config.TextColumn("L", width="small"),
                                     "Durchmesser": st.column_config.TextColumn("Ø", width="small"),
-                                    "Dm_Kl": st.column_config.TextColumn("Kl", width="small"), # NEU
-                                    "Gue_Kl": st.column_config.TextColumn("Q", width="small"), # NEU
+                                    "Dm_Kl": st.column_config.TextColumn("KL", width="small"), # KLASSE
+                                    "Gue_Kl": st.column_config.TextColumn("G", width="small"), # GÜTE
                                     "Info": st.column_config.TextColumn("Info", width="medium"),
                                     "WNr": st.column_config.TextColumn("WNr", width="small")
                                 }
@@ -624,14 +621,14 @@ with tab3:
                 with c2:
                     st.markdown("### 2. Einzelstämme")
                     if not match.empty:
-                        # MOBILE OPTIMIERUNG
+                        # MOBILE OPTIMIERUNG & Header G / KL
                         edited_s = st.data_editor(
                             match[['WNr', 'Holzart', 'Volumen_Fm', 'Dm_Kl', 'Gue_Kl', 'Geliefert', 'Info']],
                             column_config={
                                 "Holzart": st.column_config.TextColumn("H", width="small"),
                                 "Volumen_Fm": st.column_config.NumberColumn("Fm", width="small"),
-                                "Dm_Kl": st.column_config.TextColumn("Kl", width="small"),
-                                "Gue_Kl": st.column_config.TextColumn("Q", width="small"),
+                                "Dm_Kl": st.column_config.TextColumn("KL", width="small"),
+                                "Gue_Kl": st.column_config.TextColumn("G", width="small"),
                                 "Geliefert": st.column_config.CheckboxColumn("Fertig?", default=False),
                                 "Info": st.column_config.TextColumn("Info", width="medium"),
                                 "WNr": st.column_config.TextColumn("WNr", width="small")
