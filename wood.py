@@ -275,14 +275,14 @@ with tab1:
                             Basier deine Analyse ausschließlich auf dem Dokumentinhalt – mache keine externen Annahmen. 
                             Denke schrittweise: Beschreibe zuerst deinen Ansatz, dann die Extraktion und schließlich Unstimmigkeiten..
                             
-                            1. METADATEN:
+                             METADATEN:
                             - "Gesamtmenge" (Fm), "Stämme gezählt" (auf DIESER Seite/Datei).
                             - "Revier Ort": Suche die Adresse des Reviers. Extrahiere NUR den Ortsnamen neben der PLZ (z.B. "Inneringen").
                             - "Zertifikat": Suche nach "FSC", "PEFC".
                             - "Los", "Revier", "Datum".
                             Falls Daten fehlen, markiere sie als "nicht gefunden" und erkläre warum.
                             
-                            2. EINZELSTÄMME:
+                             EINZELSTÄMME:
                             Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Spalten: WNr, Lä, DoR, FmoR.
                             "wnr": Waldnummer (WNr).
                            "laenge": Länge (Lä) in Metern.
@@ -292,8 +292,9 @@ with tab1:
 
 Achte auf Vollständigkeit: Überprüfe, dass keine Stammnummer vergessen oder doppelt erfasst wird. Vergleiche mit der Gesamtmenge aus Metadaten.
 Waldnummern sind nie doppelt vergeben und stämme ohne waldnummer gibt es nicht.
-                            3. POLTER & GPS:
+                            POLTER & GPS:
                             Suche Polter-Listen mit GPS. Extrahiere den String exakt (z.B. "48°17'06,71").
+                            Falls Unstimmigkeiten (z. B. Summen passen nicht, fehlende Einträge), liste sie detailliert im "unstimmigkeiten"-Feld auf und schlage Korrekturen vor.
                             
                             --- JSON STRUKTUR ---
                             {
