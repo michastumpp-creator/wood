@@ -116,7 +116,6 @@ def save_db(db_data):
 def save_to_json(data):
     db = load_db()
     
-    # Eindeutiger Zeitstempel für diesen Upload-Vorgang
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     meta = data.get('meta', {})
@@ -177,7 +176,6 @@ def save_to_json(data):
     return save_db(db)
 
 def delete_entry_by_timestamp(timestamp):
-    """Löscht exakt den Upload, der zu diesem Zeitpunkt gemacht wurde."""
     db = load_db()
     
     new_polter = [p for p in db['polter'] if p.get('Datum_Upload') != timestamp]
@@ -321,14 +319,17 @@ with tab1:
                             imgs = create_highlighted_pdf_images(uploaded_files[idx], 0, 0, data.get('polter', []))
                             if imgs: 
                                 cols = st.columns(len(imgs))
-                                for i, im in enumerate(imgs): with cols[i]: st.image(im, caption=f"S.{i+1}", use_container_width=True)
+                                for i, im in enumerate(imgs): 
+                                    # KORRIGIERTE SYNTAX HIER:
+                                    with cols[i]: 
+                                        st.image(im, caption=f"S.{i+1}", use_container_width=True)
                         else: st.image(uploaded_files[idx], width=300)
 
         with st.expander("Tabelle"): st.dataframe(pd.DataFrame(all_stems))
 
         if st.button("💾 Speichern"):
             if save_to_json(data):
-                st.success("Gespeichert!")
+                st.success("Gespeichert in forst_daten.json!")
                 st.session_state.analyzed_data = None
                 st.info("Daten sind im Bestand.")
 
@@ -379,7 +380,6 @@ with tab2:
             groups = df_polter.groupby(['Datum_Upload', 'Revier', 'Los_Nr'])
             
             for (upload_time, revier, los), group in groups:
-                # Metadaten aus dem ersten Eintrag der Gruppe
                 polter_sum = group['Menge_Fm'].sum()
                 ort = group['Ort'].iloc[0] if 'Ort' in group.columns else ""
                 zert = group['Zertifikat'].iloc[0] if 'Zertifikat' in group.columns else ""
@@ -393,7 +393,6 @@ with tab2:
                 match = pd.DataFrame()
                 
                 if not df_staemme.empty and 'Datum_Upload' in df_staemme.columns:
-                    # Wir matchen Stämme exakt über den Upload-Timestamp (Sicherste Methode!)
                     match = df_staemme[df_staemme['Datum_Upload'] == upload_time]
                     
                     if not match.empty:
@@ -403,8 +402,7 @@ with tab2:
                             counts = non_k['Holzart'].value_counts().head(3)
                             stem_info = " | " + ", ".join([f"{k}: {v}" for k,v in counts.items()])
 
-                # Titel mit Upload-Datum im Tooltip oder Text
-                upload_short = upload_time.split(' ')[0] # Nur Datum
+                upload_short = upload_time.split(' ')[0]
                 title = f"🌲 {revier}{ort_lbl}{zert_lbl} | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm | {stamm_anzahl} Stk{stem_info}"
                 
                 with st.expander(title):
