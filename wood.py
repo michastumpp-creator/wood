@@ -15,6 +15,10 @@ from google.genai import types
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Forst-Manager", page_icon="🌲", layout="wide")
 DB_FILE = "forst_daten.json"
+UPLOAD_DIR = "belege"  # Ordner für die Dateien
+
+# Stelle sicher, dass der Ordner existiert
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # --- SESSION STATE ---
 if 'analyzed_data' not in st.session_state:
@@ -103,9 +107,36 @@ def save_db(db_data):
         return False
 
 # --- DATEN OPERATIONEN ---
-def save_to_json(data):
+def save_to_json(data, source_files=None):
+    """
+    Speichert Daten UND die Original-Dateien.
+    source_files: Liste der UploadedFile Objekte
+    """
     db = load_db()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    file_ts = datetime.now().strftime("%Y%m%d_%H%M%S") # Dateiname sicher
+    
+    # 1. DATEIEN SPEICHERN
+    saved_file_paths = []
+    if source_files:
+        for idx, file_obj in enumerate(source_files):
+            try:
+                # Dateiendung ermitteln
+                ext = file_obj.name.split('.')[-1]
+                # Neuer Name: Zeitstempel_Index.pdf
+                filename = f"{file_ts}_{idx}.{ext}"
+                filepath = os.path.join(UPLOAD_DIR, filename)
+                
+                # Datei schreiben
+                file_obj.seek(0) # Reset Pointer
+                with open(filepath, "wb") as f:
+                    f.write(file_obj.getbuffer())
+                
+                saved_file_paths.append(filepath)
+            except Exception as e:
+                st.error(f"Konnte Datei nicht speichern: {e}")
+
+    # Metadaten
     meta = data.get('meta', {})
     los, revier = str(meta.get('los', 'Unbekannt')), str(meta.get('revier', 'Unbekannt'))
     ort, zert = str(meta.get('revier_ort', '')), str(meta.get('zertifikat', ''))
@@ -113,19 +144,23 @@ def save_to_json(data):
     soll_menge = str(meta.get('dokument_summe', 0)).replace('.', ',')
     def fmt(val): return str(val).replace(',', '.') if val is not None else ""
 
+    # Polter
     for p in data.get('polter', []):
         lat_text, lon_text = str(p.get('lat', '')), str(p.get('lon', ''))
         try:
             l_lat, l_lon = parse_gps_for_map(lat_text), parse_gps_for_map(lon_text)
             link = f"http://maps.google.com/?q={l_lat},{l_lon}"
         except: link = ""
+        
         db['polter'].append({
             "Datum_Upload": timestamp, "Datum_Aufnahme": datum_aufnahme, "Los_Nr": los, "Revier": revier,
             "Polter_Nr": p.get('nr'), "Menge_Fm": fmt(p.get('fm')), "Lat": lat_text, "Lon": lon_text,
             "Maps_Link": link, "Ort": ort, "Zertifikat": zert, "Soll_Menge_Dokument": soll_menge,
-            "Status": "Bestand", "Geliefert": False, "Notiz": ""
+            "Status": "Bestand", "Geliefert": False, "Notiz": "",
+            "Belege": saved_file_paths # Liste der Dateipfade speichern
         })
 
+    # Stämme
     for s in data.get('staemme', []):
         wnr = s.get('wnr', '')
         if s.get('klammer'): wnr = f"{wnr} (K)"
@@ -139,6 +174,11 @@ def save_to_json(data):
 
 def delete_entry_by_timestamp(timestamp):
     db = load_db()
+    
+    # Optional: Dateien auch von der Festplatte löschen?
+    # Hier löschen wir sie erstmal nur aus der DB Referenz, um sicher zu sein.
+    # Wer mag, kann hier os.remove(path) einbauen.
+    
     db['polter'] = [p for p in db['polter'] if p.get('Datum_Upload') != timestamp]
     db['staemme'] = [s for s in db['staemme'] if s.get('Datum_Upload') != timestamp]
     return save_db(db)
@@ -176,7 +216,8 @@ def load_data_frames():
     df_p = pd.DataFrame(db['polter'])
     if not df_p.empty:
         if 'Menge_Fm' in df_p.columns: df_p['Menge_Fm'] = df_p['Menge_Fm'].apply(to_float)
-        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Notiz', '')]:
+        # Defaults
+        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Notiz', ''), ('Belege', [])]:
             if col not in df_p.columns: df_p[col] = val
     df_s = pd.DataFrame(db['staemme'])
     if not df_s.empty:
@@ -189,7 +230,11 @@ def load_data_frames():
 def convert_df_to_excel(df_p, df_s):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        if not df_p.empty: df_p.to_excel(writer, index=False, sheet_name='Polter')
+        # Belege Spalte ist eine Liste, das mag Excel nicht. In String wandeln.
+        if not df_p.empty:
+            df_p_ex = df_p.copy()
+            df_p_ex['Belege'] = df_p_ex['Belege'].astype(str)
+            df_p_ex.to_excel(writer, index=False, sheet_name='Polter')
         if not df_s.empty: df_s.to_excel(writer, index=False, sheet_name='Einzelstaemme')
     return output.getvalue()
 
@@ -220,53 +265,43 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
     base = f"{icon} {status_text} | {revier} {ort_str} {zert_str} | Los {los} | 📅 {datum_auf} | 📦 {vol:.2f} Fm | 🪵 {stamm_anzahl} Stk"
     return f"`{base}`" if is_gray else base
 
-# --- SEITENLEISTE (STATUS, BACKUP, EXPORT) ---
+def show_files_section(file_paths):
+    """Zeigt Download-Buttons für hinterlegte Belege"""
+    if not file_paths or not isinstance(file_paths, list): return
+    
+    st.markdown("**📄 Original-Belege:**")
+    cols = st.columns(len(file_paths))
+    for i, path in enumerate(file_paths):
+        if os.path.exists(path):
+            with cols[i]:
+                file_name = os.path.basename(path)
+                with open(path, "rb") as f:
+                    st.download_button(f"⬇️ {file_name}", f, file_name=file_name)
+                # Vorschau wenn Bild
+                if path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    st.image(path, width=150)
+        else:
+            st.warning(f"Datei nicht gefunden: {path}")
+
+# --- SEITENLEISTE ---
 with st.sidebar:
     st.header("⚙️ Verwaltung")
-    
-    # 1. DB STATUS
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f: d = json.load(f)
             st.success(f"Datenbank aktiv\n\n📄 {len(d.get('polter', []))} Polter")
-            
             st.divider()
-            
-            # 2. BACKUP (JSON)
-            st.markdown("**Sicherung:**")
             with open(DB_FILE, "r") as f:
-                st.download_button(
-                    label="⬇️ Datenbank sichern (Backup)",
-                    data=f,
-                    file_name=f"backup_forst_{datetime.now().strftime('%Y-%m-%d')}.json",
-                    mime="application/json",
-                    help="Lade die komplette Datenbank herunter, um sie zu sichern."
-                )
-
-            # 3. EXPORT (EXCEL)
-            st.markdown("**Export:**")
+                st.download_button("⬇️ Backup (JSON)", f, file_name=f"backup_{datetime.now().strftime('%Y-%m-%d')}.json")
             df_p_ex, df_s_ex = load_data_frames()
             if not df_p_ex.empty:
-                excel_data = convert_df_to_excel(df_p_ex, df_s_ex)
-                st.download_button(
-                    label="📊 Alles als Excel laden",
-                    data=excel_data,
-                    file_name=f"forst_export_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    help="Erstellt eine Excel-Datei für Abrechnungen."
-                )
-            
+                st.download_button("📊 Export (Excel)", convert_df_to_excel(df_p_ex, df_s_ex), file_name=f"export.xlsx")
             st.divider()
-            
-            # 4. RESET (GEFAHR)
             with st.expander("Gefahrenzone"):
-                if st.button("🗑️ Alle Daten löschen (Reset)"):
-                    os.remove(DB_FILE); st.rerun()
-
+                if st.button("🗑️ Reset All"): os.remove(DB_FILE); st.rerun()
         except:
             st.error("🔴 Datei beschädigt!")
-            if st.button("🗑️ Reset (Reparieren)"):
-                os.remove(DB_FILE); st.rerun()
+            if st.button("🗑️ Reset"): os.remove(DB_FILE); st.rerun()
     else: st.info("⚪ Datenbank leer")
 
 # --- APP START ---
@@ -325,13 +360,11 @@ with tab1:
         
         st.divider()
         stems = data.get('staemme', [])
-        valid_stems = [s for s in stems if not s.get('klammer')]
         doc_sum = to_float(data.get('meta', {}).get('dokument_summe', 0))
         stamm_sum = sum([to_float(s.get('fm', 0)) for s in stems]) 
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Festmeter", f"{doc_sum:.2f} / {stamm_sum:.2f}", delta=round(stamm_sum-doc_sum, 2))
-        c2.metric("Stückzahl", f"{int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0)))} / {len(valid_stems)}", delta=len(valid_stems)-int(to_float(data.get('meta', {}).get('dokument_anzahl_staemme', 0))))
         c3.metric(f"Polter", len(data.get('polter', [])))
 
         with st.expander("PDF-Check"):
@@ -349,7 +382,7 @@ with tab1:
         with st.expander("Daten"): st.dataframe(pd.DataFrame(stems))
         
         if st.button("💾 Speichern"):
-            if save_to_json(data):
+            if save_to_json(data, uploaded_files): # HIER: Dateien übergeben
                 st.success("Gespeichert!")
                 st.session_state.analyzed_data = None
                 st.rerun()
@@ -384,6 +417,9 @@ with tab2:
                 note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
                 match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                 
+                # Dateien Liste
+                belege = grp['Belege'].iloc[0] if 'Belege' in grp.columns else []
+
                 ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
                 zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
                 datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
@@ -391,6 +427,9 @@ with tab2:
                 final_title = get_list_title(ut, grp, match, rev, los, ort, zert, datum_auf)
 
                 with st.expander(final_title):
+                    show_files_section(belege) # DATEIEN ANZEIGEN
+                    st.divider()
+                    
                     new_note = st.text_area("Notiz:", value=note_val, key=f"note_b_{ut}", height=68)
                     
                     c_act, c_cnt = st.columns([1, 4])
@@ -438,6 +477,7 @@ with tab3:
             done = len(grp[grp['Geliefert'] == True]); total = len(grp)
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
             match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
+            belege = grp['Belege'].iloc[0] if 'Belege' in grp.columns else []
             
             ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
             zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
@@ -447,6 +487,8 @@ with tab3:
             
             with st.expander(final_title):
                 st.progress(done/total if total>0 else 0)
+                show_files_section(belege) # DATEIEN ANZEIGEN
+                
                 n_note = st.text_area("Notiz Fuhrmann:", value=note_val, key=f"note_t_{ut}")
 
                 c1, c2 = st.columns([1, 1])
