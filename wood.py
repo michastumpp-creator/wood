@@ -19,7 +19,6 @@ DB_FILE = "forst_daten.json"
 UPLOAD_DIR = "belege"
 BACKUP_DIR = "backups"
 
-# Ordner erstellen
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
@@ -70,7 +69,6 @@ def get_google_maps_route_url(group_df):
         lon = parse_gps_for_map(r.get('Lon', ''))
         if lat > 0 and lon > 0:
             coords.append(f"{lat},{lon}")
-    
     if not coords: return None
     dest = coords[-1]
     base_url = "https://www.google.com/maps/dir/?api=1"
@@ -110,7 +108,7 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
         images.append(Image.open(io.BytesIO(img_data)))
     return images
 
-# --- BACKUP FUNKTION ---
+# --- BACKUP ---
 def create_auto_backup():
     if os.path.exists(DB_FILE):
         try:
@@ -122,7 +120,7 @@ def create_auto_backup():
                 os.remove(backups[0]); backups.pop(0)
         except Exception as e: print(f"Backup Fehler: {e}")
 
-# --- LOKALE DATENBANK ---
+# --- DB ---
 def load_db():
     if not os.path.exists(DB_FILE): return {"polter": [], "staemme": []}
     try:
@@ -139,7 +137,7 @@ def save_db(db_data):
         st.error(f"Fehler: {e}")
         return False
 
-# --- DATEN OPERATIONEN ---
+# --- LOGIK ---
 def save_to_json(data, source_files=None):
     db = load_db()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -234,7 +232,7 @@ def load_data_frames():
     df_s = pd.DataFrame(db['staemme'])
     if not df_s.empty:
         if 'Volumen_Fm' in df_s.columns: df_s['Volumen_Fm'] = df_s['Volumen_Fm'].apply(to_float)
-        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', '')]:
+        for col, val in [('Status', 'Bestand'), ('Geliefert', False), ('Info', ''), ('Holzart', '')]:
             if col not in df_s.columns: df_s[col] = val
     return df_p, df_s
 
@@ -336,7 +334,7 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            res = client.models.generate_content(model="gemini-3-pro-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
+                            res = client.models.generate_content(model="gemini-3-flash-preview", contents=[prompt, cont], config=types.GenerateContentConfig(response_mime_type="application/json"))
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
                             else: 
@@ -404,12 +402,10 @@ with tab2:
     else:
         st.subheader("📊 Lager")
         
-        # --- NEUE KPI METRIKEN ---
+        # 1. KPI REIHE (STATUS)
         total_fm = df_p['Menge_Fm'].sum()
         done_fm = df_p[df_p['Geliefert'] == True]['Menge_Fm'].sum()
         remaining_fm = total_fm - done_fm
-        
-        # FSC Berechnung (String Contains, Case Insensitive)
         fsc_mask = df_p['Zertifikat'].astype(str).str.contains("FSC", case=False, na=False)
         fsc_fm = df_p[fsc_mask]['Menge_Fm'].sum()
         
@@ -419,6 +415,27 @@ with tab2:
         c3.metric("🌲 Noch im Wald", f"{remaining_fm:.2f} Fm")
         c4.metric("✅ Davon FSC", f"{fsc_fm:.2f} Fm")
         
+        # 2. KPI REIHE (HOLZARTEN) - Nur wenn Stämme vorhanden sind
+        if not df_s.empty and 'Holzart' in df_s.columns:
+            # Wir machen eine unscharfe Suche auf dem DataFrame
+            df_s['Art_Lower'] = df_s['Holzart'].astype(str).str.lower()
+            
+            def get_vol(keyword):
+                mask = df_s['Art_Lower'].str.contains(keyword, na=False)
+                return df_s[mask]['Volumen_Fm'].sum()
+            
+            vol_bu = get_vol("buch") # Buche, Rotbuche
+            vol_ei = get_vol("eich") # Eiche, Stieleiche
+            vol_es = get_vol("esch") # Esche
+            # Nadelholz / Rest (Fichte, Kiefer, Tanne oder alles andere)
+            vol_nd = get_vol("fich") + get_vol("kief") + get_vol("tan") 
+            
+            c5, c6, c7, c8 = st.columns(4)
+            c5.metric("🌳 Buche", f"{vol_bu:.2f} Fm")
+            c6.metric("🌳 Eiche", f"{vol_ei:.2f} Fm")
+            c7.metric("🌳 Esche", f"{vol_es:.2f} Fm")
+            c8.metric("🌲 Nadel/Andere", f"{vol_nd:.2f} Fm")
+
         st.divider()
         
         c_st, c_mp = st.columns([1, 1])
