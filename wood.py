@@ -31,8 +31,7 @@ def load_prompt():
         with open("system_prompt.txt", "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        st.error("❌ Fehler: Die Datei 'system_prompt.txt' fehlt!")
-        return None
+        return None # Fallback im Code behandeln
 
 # --- HELFER: INPUT VERSTEHEN ---
 def to_float(val):
@@ -84,7 +83,6 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
         if raw_lat: search_terms.append({"val": str(raw_lat), "color": (0, 1, 0)})
         if raw_lon: search_terms.append({"val": str(raw_lon), "color": (0, 1, 0)})
 
-    # Max 2 Seiten pro Datei visualisieren
     for page_num, page in enumerate(doc):
         if page_num > 1: break 
         for item in search_terms:
@@ -149,7 +147,6 @@ def save_to_sheets(data):
         if "Soll_Menge_Dokument" not in headers: ws_polter.update_cell(1, len(headers)+1, "Soll_Menge_Dokument")
     except: pass
 
-    # Soll Menge aus dem Dokument für die DB speichern
     soll_menge = fmt(meta.get('dokument_summe', 0))
 
     polter_rows = []
@@ -257,80 +254,83 @@ with tab1:
                 # Prompt aus Datei laden
                 system_prompt_text = load_prompt()
                 
-                if system_prompt_text:
-                    aggregated_data = {
-                        "meta": {}, 
-                        "polter": [], 
-                        "staemme": [],
-                        "total_soll_summe": 0.0,
-                        "total_soll_anzahl": 0.0
-                    }
-                    
-                    progress_bar = st.progress(0)
-                    
-                    for idx, uploaded_file in enumerate(uploaded_files):
-                        with st.spinner(f"Lese Datei {idx+1}/{len(uploaded_files)}: {uploaded_file.name}..."):
-                            
-                            content = None
-                            uploaded_file.seek(0)
-                            if uploaded_file.type == "application/pdf":
-                                content = types.Part.from_bytes(data=uploaded_file.read(), mime_type="application/pdf")
-                            else:
-                                img = Image.open(uploaded_file)
-                                content = img
-
-                            try:
-                                response = client.models.generate_content(
-                                    model="gemini-3-flash-preview", 
-                                    contents=[system_prompt_text, content],
-                                    config=types.GenerateContentConfig(response_mime_type="application/json")
-                                )
-                                clean = response.text.replace("```json", "").replace("```", "").strip()
-                                single_file_data = json.loads(clean)
-                                
-                                # META
-                                if not aggregated_data["meta"]:
-                                    aggregated_data["meta"] = single_file_data.get("meta", {})
-                                else:
-                                    # Updates wenn nötig
-                                    new_meta = single_file_data.get("meta", {})
-                                    if not aggregated_data["meta"].get("zertifikat") and new_meta.get("zertifikat"):
-                                        aggregated_data["meta"]["zertifikat"] = new_meta["zertifikat"]
-                                    if not aggregated_data["meta"].get("revier_ort") and new_meta.get("revier_ort"):
-                                        aggregated_data["meta"]["revier_ort"] = new_meta["revier_ort"]
-                                
-                                # SUMMEN
-                                aggregated_data["total_soll_summe"] += to_float(single_file_data.get("meta", {}).get("dokument_summe", 0))
-                                aggregated_data["total_soll_anzahl"] += to_float(single_file_data.get("meta", {}).get("dokument_anzahl_staemme", 0))
-                                
-                                # LISTEN
-                                aggregated_data["polter"].extend(single_file_data.get("polter", []))
-                                aggregated_data["staemme"].extend(single_file_data.get("staemme", []))
-                                
-                            except Exception as e:
-                                st.error(f"Fehler bei {uploaded_file.name}: {e}")
-                        
-                        progress_bar.progress((idx + 1) / len(uploaded_files))
-
-                    # Finalisieren
-                    aggregated_data["meta"]["dokument_summe"] = aggregated_data["total_soll_summe"]
-                    aggregated_data["meta"]["dokument_anzahl_staemme"] = aggregated_data["total_soll_anzahl"]
-                    
-                    st.session_state.analyzed_data = aggregated_data
-                    
-                    # KI Check
-                    check_prompt = f"""
-                    Check der Gesamtdaten ({len(uploaded_files)} Dateien):
-                    Daten: {json.dumps(aggregated_data)}
-                    Stimmt die Summe der Stämme mit 'dokument_summe' ({aggregated_data['total_soll_summe']}) überein?
-                    Antworte kurz.
+                # Fallback Prompt, falls Datei fehlt
+                if not system_prompt_text:
+                    system_prompt_text = """
+                    Du bist ein KI-Assistent für Forstwirtschaft. Analysiere das Dokument.
+                    1. METADATEN: "Gesamtmenge" (Fm), "Stämme gezählt", "Revier Ort" (nur Ort), "Zertifikat".
+                    2. EINZELSTÄMME: Tabelle "ZUSAMMENSTELLUNG NACH WALDNUMMERN". Wenn "K" -> klammer: true.
+                    3. POLTER & GPS: Polter-Listen mit GPS (Exakter String).
                     """
-                    try:
-                        check_resp = client.models.generate_content(model="gemini-3-flash-preview", contents=check_prompt)
-                        st.session_state.messages.append({"role": "assistant", "content": check_resp.text})
-                    except: pass
+
+                aggregated_data = {
+                    "meta": {}, 
+                    "polter": [], 
+                    "staemme": [],
+                    "total_soll_summe": 0.0,
+                    "total_soll_anzahl": 0.0
+                }
+                
+                progress_bar = st.progress(0)
+                
+                for idx, uploaded_file in enumerate(uploaded_files):
+                    with st.spinner(f"Lese Datei {idx+1}/{len(uploaded_files)}: {uploaded_file.name}..."):
+                        
+                        content = None
+                        uploaded_file.seek(0)
+                        if uploaded_file.type == "application/pdf":
+                            content = types.Part.from_bytes(data=uploaded_file.read(), mime_type="application/pdf")
+                        else:
+                            img = Image.open(uploaded_file)
+                            content = img
+
+                        try:
+                            response = client.models.generate_content(
+                                model="gemini-3-flash-preview", 
+                                contents=[system_prompt_text, content],
+                                config=types.GenerateContentConfig(response_mime_type="application/json")
+                            )
+                            clean = response.text.replace("```json", "").replace("```", "").strip()
+                            single_file_data = json.loads(clean)
+                            
+                            if not aggregated_data["meta"]:
+                                aggregated_data["meta"] = single_file_data.get("meta", {})
+                            else:
+                                new_meta = single_file_data.get("meta", {})
+                                if not aggregated_data["meta"].get("zertifikat") and new_meta.get("zertifikat"):
+                                    aggregated_data["meta"]["zertifikat"] = new_meta["zertifikat"]
+                                if not aggregated_data["meta"].get("revier_ort") and new_meta.get("revier_ort"):
+                                    aggregated_data["meta"]["revier_ort"] = new_meta["revier_ort"]
+                            
+                            aggregated_data["total_soll_summe"] += to_float(single_file_data.get("meta", {}).get("dokument_summe", 0))
+                            aggregated_data["total_soll_anzahl"] += to_float(single_file_data.get("meta", {}).get("dokument_anzahl_staemme", 0))
+                            
+                            aggregated_data["polter"].extend(single_file_data.get("polter", []))
+                            aggregated_data["staemme"].extend(single_file_data.get("staemme", []))
+                            
+                        except Exception as e:
+                            st.error(f"Fehler bei {uploaded_file.name}: {e}")
                     
-                    st.rerun()
+                    progress_bar.progress((idx + 1) / len(uploaded_files))
+
+                aggregated_data["meta"]["dokument_summe"] = aggregated_data["total_soll_summe"]
+                aggregated_data["meta"]["dokument_anzahl_staemme"] = aggregated_data["total_soll_anzahl"]
+                
+                st.session_state.analyzed_data = aggregated_data
+                
+                # KI Check
+                check_prompt = f"""
+                Check der Gesamtdaten ({len(uploaded_files)} Dateien):
+                Daten: {json.dumps(aggregated_data)}
+                Stimmt die Summe der Stämme mit 'dokument_summe' ({aggregated_data['total_soll_summe']}) überein?
+                Antworte kurz.
+                """
+                try:
+                    check_resp = client.models.generate_content(model="gemini-3-flash-preview", contents=check_prompt)
+                    st.session_state.messages.append({"role": "assistant", "content": check_resp.text})
+                except: pass
+                
+                st.rerun()
 
     if st.session_state.analyzed_data:
         data = st.session_state.analyzed_data
@@ -412,11 +412,16 @@ with tab2:
         c_stats, c_map = st.columns([1, 1]) 
         
         with c_stats:
-            if not df_staemme.empty:
-                stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
-                st.dataframe(stats, height=200, use_container_width=True)
-                st.caption(f"**Gesamt: {stats.sum():.2f} Fm**")
-            else: st.info("Leer")
+            # HIER WAR DER FEHLER: Wir prüfen jetzt zuerst die Spalten!
+            if not df_staemme.empty and 'Holzart' in df_staemme.columns and 'Volumen_Fm' in df_staemme.columns:
+                try:
+                    stats = df_staemme.groupby('Holzart')['Volumen_Fm'].sum().sort_values(ascending=False)
+                    st.dataframe(stats, height=200, use_container_width=True)
+                    st.caption(f"**Gesamt: {stats.sum():.2f} Fm**")
+                except Exception as e:
+                    st.error(f"Fehler bei Statistik: {e}")
+            else:
+                st.info("Keine Stammdaten für Statistik verfügbar.")
 
         with c_map:
             all_pts = []
@@ -453,9 +458,9 @@ with tab2:
                 stamm_anzahl = 0
                 match = pd.DataFrame()
                 
-                if not df_staemme.empty:
+                if not df_staemme.empty and 'Los_Nr' in df_staemme.columns:
                     match = df_staemme[(df_staemme['Los_Nr'].astype(str) == str(los))]
-                    if not match.empty:
+                    if not match.empty and 'WNr' in match.columns and 'Holzart' in match.columns:
                         non_k = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
                         stamm_anzahl = len(non_k)
                         counts = non_k['Holzart'].value_counts().head(3)
@@ -493,6 +498,8 @@ with tab2:
                     with c2:
                         if not match.empty:
                             st.markdown(f"**Einzelstämme**")
-                            st.dataframe(match[['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm']], hide_index=True)
+                            # Sicherstellen dass Spalten da sind
+                            cols_to_show = [c for c in ['WNr', 'Holzart', 'Laenge', 'Durchmesser', 'Volumen_Fm'] if c in match.columns]
+                            st.dataframe(match[cols_to_show], hide_index=True)
                         else:
                             st.caption("Keine Stämme.")
