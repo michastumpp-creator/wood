@@ -95,7 +95,6 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
 
 # --- LOKALE DATENBANK (JSON) ---
 def load_db():
-    """Lädt die Datenbank aus der JSON-Datei."""
     if not os.path.exists(DB_FILE):
         return {"polter": [], "staemme": []}
     try:
@@ -105,7 +104,6 @@ def load_db():
         return {"polter": [], "staemme": []}
 
 def save_db(db_data):
-    """Speichert die Datenbank in die JSON-Datei."""
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             json.dump(db_data, f, ensure_ascii=False, indent=4)
@@ -118,19 +116,20 @@ def save_db(db_data):
 def save_to_json(data):
     db = load_db()
     
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # Eindeutiger Zeitstempel für diesen Upload-Vorgang
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     meta = data.get('meta', {})
     los = str(meta.get('los', 'Unbekannt'))
     revier = str(meta.get('revier', 'Unbekannt'))
     ort = str(meta.get('revier_ort', ''))
     zert = str(meta.get('zertifikat', ''))
-    datum_aufnahme = str(meta.get('datum', timestamp.split(' ')[0]))
+    datum_aufnahme = str(meta.get('datum', datetime.now().strftime("%Y-%m-%d")))
     soll_menge = str(meta.get('dokument_summe', 0)).replace('.', ',')
 
     def fmt(val): return str(val).replace(',', '.') if val is not None else ""
 
-    # 1. POLTER EINTRAGEN
+    # 1. POLTER
     for p in data.get('polter', []):
         lat_text = str(p.get('lat', ''))
         lon_text = str(p.get('lon', ''))
@@ -140,7 +139,6 @@ def save_to_json(data):
             link = f"http://maps.google.com/?q={l_lat},{l_lon}"
         except: link = ""
         
-        # Datensatz erstellen (wie eine Zeile in Excel)
         entry = {
             "Datum_Upload": timestamp,
             "Datum_Aufnahme": datum_aufnahme,
@@ -157,7 +155,7 @@ def save_to_json(data):
         }
         db['polter'].append(entry)
 
-    # 2. STÄMME EINTRAGEN
+    # 2. STÄMME
     stems = data.get('staemme', [])
     for s in stems:
         wnr = s.get('wnr', '')
@@ -178,21 +176,12 @@ def save_to_json(data):
 
     return save_db(db)
 
-def delete_entry(los, revier, datum_aufnahme):
+def delete_entry_by_timestamp(timestamp):
+    """Löscht exakt den Upload, der zu diesem Zeitpunkt gemacht wurde."""
     db = load_db()
     
-    # Filtern: Wir behalten alles, was NICHT passt (also nicht gelöscht werden soll)
-    new_polter = [
-        p for p in db['polter'] 
-        if not (str(p.get('Los_Nr')) == str(los) and str(p.get('Revier')) == str(revier) and str(p.get('Datum_Aufnahme')) == str(datum_aufnahme))
-    ]
-    
-    # Bei Stämmen prüfen wir nur Los und Revier (Datum ist dort oft nicht relevant für die Zuordnung, oder wir nehmen es dazu)
-    # Einfacher: Wir löschen Stämme, die zu diesem Los gehören.
-    new_staemme = [
-        s for s in db['staemme']
-        if not (str(s.get('Los_Nr')) == str(los) and str(s.get('Revier')) == str(revier))
-    ]
+    new_polter = [p for p in db['polter'] if p.get('Datum_Upload') != timestamp]
+    new_staemme = [s for s in db['staemme'] if s.get('Datum_Upload') != timestamp]
     
     db['polter'] = new_polter
     db['staemme'] = new_staemme
@@ -221,7 +210,7 @@ tab1, tab2 = st.tabs(["📸 Scan & Analyse", "🗃️ Bestand"])
 with tab1:
     try: client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
     except: 
-        st.error("Google API Key fehlt in secrets.toml!")
+        st.error("Google API Key fehlt!")
         st.stop()
 
     uploaded_files = st.file_uploader("Holzlisten hochladen", type=["pdf", "jpg", "png"], accept_multiple_files=True)
@@ -279,7 +268,6 @@ with tab1:
                             aggregated_data["staemme"].extend(single_file_data.get("staemme", []))
                             
                         except Exception as e: st.error(f"Fehler: {e}")
-                    
                     progress_bar.progress((idx + 1) / len(uploaded_files))
 
                 aggregated_data["meta"]["dokument_summe"] = aggregated_data["total_soll_summe"]
@@ -287,9 +275,8 @@ with tab1:
                 
                 st.session_state.analyzed_data = aggregated_data
                 
-                # Check
-                check_prompt = f"Check Daten: {json.dumps(aggregated_data)}. Stimmt Summe der Stämme mit {aggregated_data['total_soll_summe']} überein? Kurz."
                 try:
+                    check_prompt = f"Check Daten: {json.dumps(aggregated_data)}. Stimmt Summe ({aggregated_data['total_soll_summe']})? Kurz."
                     r = client.models.generate_content(model="gemini-3-flash-preview", contents=check_prompt)
                     st.session_state.messages.append({"role": "assistant", "content": r.text})
                 except: pass
@@ -334,15 +321,14 @@ with tab1:
                             imgs = create_highlighted_pdf_images(uploaded_files[idx], 0, 0, data.get('polter', []))
                             if imgs: 
                                 cols = st.columns(len(imgs))
-                                for i, im in enumerate(imgs): 
-                                    with cols[i]: st.image(im, caption=f"S.{i+1}", use_container_width=True)
+                                for i, im in enumerate(imgs): with cols[i]: st.image(im, caption=f"S.{i+1}", use_container_width=True)
                         else: st.image(uploaded_files[idx], width=300)
 
         with st.expander("Tabelle"): st.dataframe(pd.DataFrame(all_stems))
 
         if st.button("💾 Speichern"):
             if save_to_json(data):
-                st.success("Gespeichert in forst_daten.json!")
+                st.success("Gespeichert!")
                 st.session_state.analyzed_data = None
                 st.info("Daten sind im Bestand.")
 
@@ -353,7 +339,7 @@ with tab2:
     df_polter, df_staemme = load_data_frames()
     
     if df_polter.empty:
-        st.info("Noch keine Daten in forst_daten.json")
+        st.info("Keine Daten in forst_daten.json")
     else:
         st.subheader("📊 Übersicht")
         c_stats, c_map = st.columns([1, 1]) 
@@ -384,13 +370,21 @@ with tab2:
         st.divider()
         st.subheader("📂 Akten")
         
-        if 'Los_Nr' in df_polter.columns:
-            groups = df_polter.groupby(['Revier', 'Los_Nr', 'Datum_Aufnahme'])
+        # NEUE LOGIK: Gruppierung nach UPLOAD-ZEITPUNKT
+        if 'Datum_Upload' in df_polter.columns:
+            # Sortieren: Neueste Uploads zuerst
+            df_polter = df_polter.sort_values(by="Datum_Upload", ascending=False)
             
-            for (revier, los, datum), group in groups:
+            # Wir gruppieren nach dem exakten Upload-Timestamp
+            groups = df_polter.groupby(['Datum_Upload', 'Revier', 'Los_Nr'])
+            
+            for (upload_time, revier, los), group in groups:
+                # Metadaten aus dem ersten Eintrag der Gruppe
                 polter_sum = group['Menge_Fm'].sum()
                 ort = group['Ort'].iloc[0] if 'Ort' in group.columns else ""
                 zert = group['Zertifikat'].iloc[0] if 'Zertifikat' in group.columns else ""
+                datum_auf = group['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in group.columns else ""
+                
                 ort_lbl = f" ({ort})" if ort else ""
                 zert_lbl = f" [{zert}]" if zert else ""
 
@@ -398,8 +392,10 @@ with tab2:
                 stamm_anzahl = 0
                 match = pd.DataFrame()
                 
-                if not df_staemme.empty and 'Los_Nr' in df_staemme.columns:
-                    match = df_staemme[df_staemme['Los_Nr'].astype(str) == str(los)]
+                if not df_staemme.empty and 'Datum_Upload' in df_staemme.columns:
+                    # Wir matchen Stämme exakt über den Upload-Timestamp (Sicherste Methode!)
+                    match = df_staemme[df_staemme['Datum_Upload'] == upload_time]
+                    
                     if not match.empty:
                         non_k = match[~match['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
                         stamm_anzahl = len(non_k)
@@ -407,11 +403,15 @@ with tab2:
                             counts = non_k['Holzart'].value_counts().head(3)
                             stem_info = " | " + ", ".join([f"{k}: {v}" for k,v in counts.items()])
 
-                title = f"🌲 {revier}{ort_lbl}{zert_lbl} | Los {los} | {datum} | {polter_sum:.2f} Fm | {stamm_anzahl} Stk{stem_info}"
+                # Titel mit Upload-Datum im Tooltip oder Text
+                upload_short = upload_time.split(' ')[0] # Nur Datum
+                title = f"🌲 {revier}{ort_lbl}{zert_lbl} | Los {los} | 📅 {datum_auf} | 📦 {polter_sum:.2f} Fm | {stamm_anzahl} Stk{stem_info}"
                 
                 with st.expander(title):
-                    if st.button("🗑️ Löschen", key=f"d_{revier}_{los}_{datum}"):
-                        delete_entry(los, revier, datum)
+                    st.caption(f"Hochgeladen am: {upload_time}")
+                    
+                    if st.button("🗑️ Löschen", key=f"del_{upload_time}"):
+                        delete_entry_by_timestamp(upload_time)
                         st.rerun()
 
                     c1, c2 = st.columns([1, 1])
@@ -426,7 +426,7 @@ with tab2:
                         if pts:
                             m = folium.Map(location=pts[0], zoom_start=13)
                             for p in pts: folium.Marker(p, icon=folium.Icon(color="green", icon="tree", prefix='fa')).add_to(m)
-                            st_folium(m, width="100%", height=150, key=f"m_{los}")
+                            st_folium(m, width="100%", height=150, key=f"m_{upload_time}")
 
                     with c2:
                         if not match.empty:
