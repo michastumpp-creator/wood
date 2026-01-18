@@ -574,7 +574,7 @@ with tab1:
                             imgs = create_highlighted_pdf_images(uploaded_files[i], 0, 0, data.get('polter', []))
                             if imgs: 
                                 cols = st.columns(len(imgs))
-                                for j, im in enumerate(imgs): with cols[j]: st.image(im, caption=f"S.{j+1}", use_container_width=True)
+                                    for j, im in enumerate(imgs): with cols[j]: st.image(im, caption=f"S.{j+1}", use_container_width=True)
                         else: st.image(uploaded_files[i], width=300)
         
         with st.expander("Detail-Daten ansehen"):
