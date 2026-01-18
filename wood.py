@@ -72,7 +72,6 @@ if 'messages' not in st.session_state:
 # --- HELFER FUNKTIONEN ---
 
 def load_prompt():
-    # Standard Prompt für die KI
     return """Analysiere diese Holzliste.
     1. META-DATEN: Suche nach Gesamtmenge (dokument_summe), Anzahl Stämme (dokument_anzahl_staemme), Revier, Ort, Los-Nummer und Zertifikat (FSC/PEFC).
     2. STÄMME (Tabelle): Extrahiere jeden Stamm einzeln.
@@ -103,10 +102,8 @@ def parse_gps_for_map(val):
     val_str = str(val).strip()
     try:
         f = float(val_str.replace(',', '.'))
-        # Grober Check für Europa
         if 40 < f < 60 or 5 < f < 20: return f
     except: pass
-    # Versuch DMS Parsing
     matches = re.findall(r'(\d+)[^\d]+(\d+)[^\d]+(\d+[,.]\d+)', val_str)
     if matches:
         try:
@@ -150,7 +147,7 @@ def create_highlighted_pdf_images(uploaded_file, text_summe, text_anzahl, polter
         if raw_lat: search_terms.append({"val": str(raw_lat), "color": (0, 1, 0)})
         if raw_lon: search_terms.append({"val": str(raw_lon), "color": (0, 1, 0)})
     for page_num, page in enumerate(doc):
-        if page_num > 1: break # Nur erste 2 Seiten checken zur Performance
+        if page_num > 1: break 
         for item in search_terms:
             quads = page.search_for(item["val"])
             if quads:
@@ -173,16 +170,11 @@ def calculate_row_value(row, price_df):
     art = str(row.get('Holzart', '')).lower()
     guete = str(row.get('Gue_Kl', '')).lower()
     
-    # Fuzzy Matching Logik
-    # Wir schauen, ob der String in der Preisliste im String des Stammes vorkommt (z.B. "Bu" in "Rotbuche")
     for _, p_row in price_df.iterrows():
         p_art = str(p_row['Holzart']).lower()
         p_guete = str(p_row['Güte']).lower()
         
-        # Match Bedingungen
         art_match = (p_art in art) or (art in p_art)
-        # Bei Güte muss es genauer sein, "B" darf nicht "AB" matchen, außer wir wollen das
-        # Hier einfache String-Gleichheit für Güte bevorzugt, oder 'in'
         guete_match = p_guete == guete
         
         if art_match and guete_match:
@@ -196,7 +188,7 @@ def get_species_group(holzart):
     if "es" in h: return "Es"
     if "ei" in h: return "Ei"
     if "fi" in h: return "Fi"
-    return "So" # Sonstiges
+    return "So"
 
 # --- DATENBANK ---
 
@@ -206,14 +198,12 @@ def create_auto_backup():
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = os.path.join(BACKUP_DIR, f"auto_backup_{timestamp}.json")
             shutil.copy2(DB_FILE, backup_path)
-            # Alte Backups löschen (> 50)
             backups = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".json")])
             while len(backups) > 50:
                 os.remove(backups[0]); backups.pop(0)
         except Exception as e: print(f"Backup Fehler: {e}")
 
 def load_db():
-    # Standard Preisliste, falls DB leer oder neu
     default_prices = [
         {"Holzart": "Bu", "Güte": "B", "Preis": 120.0},
         {"Holzart": "Bu", "Güte": "C", "Preis": 85.0},
@@ -245,7 +235,7 @@ def save_db(db_data):
         st.error(f"Fehler: {e}")
         return False
 
-# --- LOGIK: SPEICHERN & UPDATES ---
+# --- SPEICHERN & UPDATES ---
 
 def save_to_json(data, source_files=None):
     db = load_db()
@@ -369,10 +359,6 @@ def get_list_title(upload_time, group_polter, group_stems, revier, los, ort, zer
     total_p = len(group_polter)
     
     vol = group_polter['Menge_Fm'].sum()
-    stamm_anzahl = 0
-    if not group_stems.empty:
-        non_k = group_stems[~group_stems['WNr'].astype(str).str.contains(r'\(K\)', na=False)]
-        stamm_anzahl = len(non_k)
 
     status_text = ""
     is_gray = False
@@ -432,20 +418,13 @@ def calculate_stats(df_p_all, df_s_all, df_prices):
         grp_tot = df_s_all.groupby('Gruppe')['Volumen_Fm'].sum()
         for k in stats["total"]: stats["total"][k] = grp_tot.get(k, 0)
 
-    # --- WERT BERECHNUNG ---
     total_value = 0.0
     left_value = 0.0
     
     if not df_s_all.empty and not df_prices.empty:
-        # Wir fügen temporär den Preis an die Tabelle an, um Summen zu bilden
         df_calc = df_s_all.copy()
         df_calc['Row_Value'] = df_calc.apply(lambda r: calculate_row_value(r, df_prices), axis=1)
-        
         total_value = df_calc['Row_Value'].sum()
-        
-        # Check was geliefert ist
-        # Vereinfachung: Wir schauen auf das 'Geliefert' Flag der Stämme
-        # Wenn wir Polter-basiert abrechnen, ist das ungenauer, aber hier OK
         left_value = df_calc[df_calc['Geliefert'] == False]['Row_Value'].sum()
 
     return total_fm, done_fm, remaining_fm, fsc_fm, stats, total_value, left_value
@@ -454,10 +433,8 @@ def calculate_stats(df_p_all, df_s_all, df_prices):
 with st.sidebar:
     st.header("⚙️ Forst-Büro")
     
-    # DATENBANK LADEN
     db_data = load_db()
     
-    # --- PREISLISTE ---
     with st.expander("💶 Preisliste bearbeiten", expanded=False):
         st.caption("Preise pro Fm je Holzart & Güte")
         df_preise_db = pd.DataFrame(db_data.get('preise', []))
@@ -501,7 +478,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["📸 Scan & KI", "🗃️ Bestand & Werte", "
 
 # --- TAB 1: SCANNER ---
 with tab1:
-    # API KEY CHECK
     api_key = st.secrets.get("GOOGLE_API_KEY") 
     if not api_key:
         st.error("Kein API Key gefunden! Bitte in `.streamlit/secrets.toml` eintragen.")
@@ -527,15 +503,14 @@ with tab1:
                         cont = uf.read() if uf.type == "application/pdf" else Image.open(uf)
                         if uf.type == "application/pdf": cont = types.Part.from_bytes(data=cont, mime_type="application/pdf")
                         try:
-                            # Modell Aufruf
+                            # Modell Aufruf: Flash ist schnell & stabil für OCR
                             res = client.models.generate_content(
-                                model="gemini-2.0-flash", # Schnelleres, stabiles Modell
+                                model="gemini-2.0-flash", 
                                 contents=[prompt, cont], 
                                 config=types.GenerateContentConfig(response_mime_type="application/json")
                             )
                             s = json.loads(res.text.replace("```json", "").replace("```", "").strip())
                             
-                            # Aggregation
                             if not agg["meta"]: agg["meta"] = s.get("meta", {})
                             else: 
                                 for k in ["zertifikat", "revier_ort", "los"]:
@@ -574,7 +549,10 @@ with tab1:
                             imgs = create_highlighted_pdf_images(uploaded_files[i], 0, 0, data.get('polter', []))
                             if imgs: 
                                 cols = st.columns(len(imgs))
-                                    for j, im in enumerate(imgs): with cols[j]: st.image(im, caption=f"S.{j+1}", use_container_width=True)
+                                # KORREKTUR: Korrekte Einrückung für den with-Block
+                                for j, im in enumerate(imgs): 
+                                    with cols[j]: 
+                                        st.image(im, caption=f"S.{j+1}", use_container_width=True)
                         else: st.image(uploaded_files[i], width=300)
         
         with st.expander("Detail-Daten ansehen"):
@@ -595,7 +573,6 @@ with tab2:
     else:
         st.subheader("📊 Finanzen & Lager")
         
-        # Statistik & Wert Berechnung
         tot, done, left, fsc, s, val_tot, val_left = calculate_stats(df_p, df_s, df_prices)
         val_done = val_tot - val_left
         
@@ -607,7 +584,6 @@ with tab2:
         
         st.divider()
         
-        # Bestand Karte
         pts = [{"lat": parse_gps_for_map(r['Lat']), "lon": parse_gps_for_map(r['Lon']), "info": f"Los {r['Los_Nr']}"} for _, r in df_p.iterrows() if parse_gps_for_map(r['Lat'])>0]
         if pts:
             m = folium.Map([pd.DataFrame(pts).lat.mean(), pd.DataFrame(pts).lon.mean()], zoom_start=11)
@@ -625,7 +601,6 @@ with tab2:
                 match = df_s[df_s['Datum_Upload'] == ut].copy() if not df_s.empty else pd.DataFrame()
                 belege = grp['Belege'].iloc[0] if 'Belege' in grp.columns else []
                 
-                # Titel generieren
                 ort = grp['Ort'].iloc[0] if 'Ort' in grp.columns else ""
                 zert = grp['Zertifikat'].iloc[0] if 'Zertifikat' in grp.columns else ""
                 datum_auf = grp['Datum_Aufnahme'].iloc[0] if 'Datum_Aufnahme' in grp.columns else ""
@@ -643,11 +618,9 @@ with tab2:
                     with c_cnt:
                         new_note = st.text_input("Notiz:", value=note_val, key=f"note_b_{ut}")
 
-                    # Tabelle Polter & Stämme
                     if not match.empty:
                         st.markdown("**Einzelstämme & Kalkulation**")
                         
-                        # Wertberechnung pro Zeile für Anzeige
                         match['Kalk_Preis'] = match.apply(lambda r: calculate_row_value(r, df_prices), axis=1)
                         
                         match['Display'] = (
@@ -678,7 +651,7 @@ with tab2:
 # --- TAB 3: TRANSPORT ---
 with tab3:
     if st.button("🔄", key="r_t"): st.cache_data.clear()
-    df_p, df_s, _ = load_data_frames() # Preise hier nicht zwingend nötig
+    df_p, df_s, _ = load_data_frames()
     df_pt = df_p[df_p['Status'] == 'Transport'] if not df_p.empty else pd.DataFrame()
     
     if df_pt.empty: st.info("Alle Aufträge erledigt.")
@@ -693,7 +666,7 @@ with tab3:
             belege = grp['Belege'].iloc[0] if 'Belege' in grp.columns else []
             note_val = grp['Notiz'].iloc[0] if 'Notiz' in grp.columns else ""
             
-            final_title = get_list_title(ut, grp, match, rev, los, "", "", "") # Kurzfassung
+            final_title = get_list_title(ut, grp, match, rev, los, "", "", "")
             
             with st.expander(final_title, expanded=True):
                 st.progress(done/total if total>0 else 0)
@@ -707,7 +680,6 @@ with tab3:
 
                 n_note = st.text_area("Notiz vom Fahrer:", value=note_val, key=f"note_t_{ut}")
 
-                # Polter Abhaken
                 st.markdown("### Lade-Liste")
                 edited_p = st.data_editor(
                     grp[['Polter_Nr', 'Menge_Fm', 'Geliefert']],
@@ -718,7 +690,6 @@ with tab3:
                     hide_index=True, key=f"ed_p_t_{ut}"
                 )
                 
-                # Karte für den Fahrer
                 v_pts = []
                 for _, r in grp.iterrows():
                     la, lo = parse_gps_for_map(r.get('Lat','')), parse_gps_for_map(r.get('Lon',''))
@@ -729,7 +700,7 @@ with tab3:
                     st_folium(m, width="100%", height=250, key=f"mp_t_{ut}")
 
                 if st.button("Auftrag Speichern", key=f"sv_t_{ut}", type="primary"):
-                    apply_batch_updates(ut, n_note, edited_p, pd.DataFrame()) # Stämme hier irrelevant für Fahrer-Check
+                    apply_batch_updates(ut, n_note, edited_p, pd.DataFrame())
                     st.success("Gespeichert!"); st.rerun()
                 
                 if done == total and total > 0:
